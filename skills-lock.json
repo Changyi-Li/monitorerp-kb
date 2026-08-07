@@ -11,19 +11,19 @@
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/code-review/SKILL.md",
-      "computedHash": "c2968e85cba73eca87a18330c57f46e153e7fa26652748b89069b8b63d3bed9f"
+      "computedHash": "591a274f7be02c24da6628b464b66be44c351adfccd7e8c12f550715c695e3fe"
     },
     "codebase-design": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/codebase-design/SKILL.md",
-      "computedHash": "cdc3d683881cbe5ca367c954571e158861176aa9af8adad1b2c5edd9eb72fe05"
+      "computedHash": "385da7f2747bd681c24029b7aaf18b58e5649383f0402522db4233344d8fc7d5"
     },
     "diagnosing-bugs": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/diagnosing-bugs/SKILL.md",
-      "computedHash": "44417076a76b40331f3816f21e76ea7c9d129e3f73cca2e159b69a56aaa838b2"
+      "computedHash": "b69bc2ee03ee31200639deed65168ab9e48db43af3ed47889a66c4bd190601eb"
     },
     "domain-modeling": {
       "source": "mattpocock/skills",
@@ -65,7 +65,7 @@
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
-      "computedHash": "569299a60c8e93880f3b3c1eca55578f58f7e1a4155876edb4cb814da3d6b3ea"
+      "computedHash": "3929c6892605b67b60503ced451876e9b313d1a909ab7066fbcd9967c56ed226"
     },
     "prototype": {
       "source": "mattpocock/skills",
@@ -155,7 +155,7 @@
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/wizard/SKILL.md",
-      "computedHash": "6f4755614c37aeff4fc68b7ab50f5694d09a073293b1d0244bdc36f6b144dcdc"
+      "computedHash": "7c72226e31b570d16d1f1d3861e7c8742e3f24330e9e0580b5141b39b3e8797c"
     },
     "writing-for-agents": {
       "source": "mattpocock/skills",
