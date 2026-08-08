@@ -1,11 +1,11 @@
 import { sql } from 'drizzle-orm'
 import type { Hono } from 'hono'
-import postgres from 'postgres'
 import { createConfiguredApp } from '../src/app.js'
 import type { Config } from '../src/config.js'
 import type { DB } from '../src/db/client.js'
 import { createDb } from '../src/db/client.js'
 import { runMigrations } from '../src/db/migrate.js'
+import { ensureDatabaseExists } from './ensure-database.js'
 
 export const TEST_DATABASE_URL =
   process.env['TEST_DATABASE_URL'] ?? 'postgres://monitorerp:monitorerp@localhost:5433/monitorerp_kb_test'
@@ -33,15 +33,7 @@ export interface TestDatabase {
  * applies the committed migrations to it.
  */
 export async function createTestDatabase(): Promise<TestDatabase> {
-  const url = new URL(TEST_DATABASE_URL)
-  const dbName = url.pathname.slice(1)
-  url.pathname = '/postgres'
-  const bootstrap = postgres(url.toString(), { max: 1, onnotice: () => {} })
-  const exists = await bootstrap`SELECT 1 FROM pg_database WHERE datname = ${dbName}`
-  if (exists.length === 0) {
-    await bootstrap.unsafe(`CREATE DATABASE ${dbName}`)
-  }
-  await bootstrap.end()
+  await ensureDatabaseExists(TEST_DATABASE_URL)
   const { db, close } = createDb(TEST_DATABASE_URL)
   await runMigrations(db)
   return { db, close }

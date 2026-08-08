@@ -22,7 +22,7 @@ export function RowMenu({
   if (actions.length === 0) return null;
 
   return (
-    <div className="relative">
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
       <Button
         variant="ghost"
         size="icon-sm"

@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MonitorERP KB — Web
 
-## Getting Started
+Next.js 16 client for the MonitorERP KB document manager. The browser talks
+to `/api/*` on this origin; `next.config.ts` proxies it to the Hono API
+(production nginx does the same).
 
-First, run the development server:
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# 1. Postgres (from the repo root) and the API
+docker compose up -d
+cd ../api && npm install && npm run dev   # API on :3001
+
+# 2. This app
+npm install
+npm run dev                                # web on :3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dataset display name is config-driven via `NEXT_PUBLIC_DATASET_NAME`
+(default `monitorerp-china-internal`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## End-to-end tests (Playwright)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Full-stack journeys against the real web app + real API + the RagFlow stub
+— no live RagFlow is involved. Playwright starts all three servers itself
+(API with a dedicated `monitorerp_kb_e2e` database on the compose Postgres,
+created and reset automatically).
 
-## Learn More
+```bash
+npx playwright install chromium   # once
+npm run test:e2e
+```
 
-To learn more about Next.js, take a look at the following resources:
+Journeys cover: sign-up → activate → sign-in; upload → mark-ready →
+publish → published → withdraw → draft; retry → exhausted → withdraw →
+re-promote → re-publish; super admin publishing another member's ready
+document; users administration with the last-admin guard; pending/
+deactivated sign-in refusal; theme persistence with the locked dark
+primary; empty states with a clear-filters action; and reduced-motion
+disabling animations.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Script | What it does |
+|---|---|
+| `npm run dev` | Next dev server on :3000 |
+| `npm run build` / `npm start` | production build / serve |
+| `npm run lint` | ESLint |
+| `npm run test:e2e` | Playwright end-to-end suite |

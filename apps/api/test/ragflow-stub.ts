@@ -46,7 +46,7 @@ export interface RagflowStub {
  * sweeper transitions by mutating the stub's run state, then assert through
  * the API.
  */
-export async function startRagflowStub(): Promise<RagflowStub> {
+export async function startRagflowStub(port = 0): Promise<RagflowStub> {
   const uploads: StoredUpload[] = []
   const chunkMethodCalls: ChunkMethodCall[] = []
   const parseTriggers: string[] = []
@@ -91,6 +91,33 @@ export async function startRagflowStub(): Promise<RagflowStub> {
     const fail = (code: number, message: string): void => {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ code, message }))
+    }
+
+    if (url.pathname === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+
+    // Test control: drive a document's run state by name (used by e2e, where
+    // the ragflow document id is not exposed through the API).
+    if (url.pathname === '/__test/run-by-name' && req.method === 'POST') {
+      const body = JSON.parse(await readBody(req)) as {
+        name?: string
+        run?: string
+        progress?: number
+        chunk_count?: number
+        progress_msg?: string
+      }
+      const upload = uploads.find((u) => u.name === body.name)
+      if (body.name === undefined || upload === undefined) return fail(404, 'document not found')
+      if (body.run !== undefined) upload.run = body.run
+      if (body.progress !== undefined) upload.progress = body.progress
+      if (body.chunk_count !== undefined) upload.chunkCount = body.chunk_count
+      if (body.progress_msg !== undefined) upload.progressMsg = body.progress_msg
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ code: 0 }))
+      return
     }
 
     if (chunksMatch !== null && req.method === 'POST') {
@@ -225,9 +252,9 @@ export async function startRagflowStub(): Promise<RagflowStub> {
     })
   }
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address() as AddressInfo
-  stub.url = `http://127.0.0.1:${port}`
+  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve))
+  const { port: boundPort } = server.address() as AddressInfo
+  stub.url = `http://127.0.0.1:${boundPort}`
   stub.close = () =>
     new Promise<void>((resolve, reject) => {
       server.close((err) => (err !== undefined ? reject(err) : resolve()))

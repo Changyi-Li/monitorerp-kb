@@ -8,6 +8,7 @@ import { usersRoutes } from './routes/users.js'
 
 export function createApp(deps: Deps): Hono {
   const app = new Hono()
+  app.get('/health', (c) => c.json({ ok: true }))
   app.route('/auth', authRoutes(deps))
   app.route('/documents', documentsRoutes(deps))
   app.route('/users', usersRoutes(deps))
