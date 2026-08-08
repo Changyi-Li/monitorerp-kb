@@ -1,10 +1,11 @@
 "use client";
 
 import { AlertTriangle, Download, History, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { StatusBadge } from "@/components/documents/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import type { User } from "@/lib/api";
 import {
   deleteDocument,
@@ -17,6 +18,7 @@ import {
   type HistoryEntry,
 } from "@/lib/documents";
 import { formatBytes, formatDate } from "@/lib/format";
+import { useInterval } from "@/lib/use-interval";
 import { cn } from "@/lib/utils";
 
 function HistoryList({ history }: { history: HistoryEntry[] }) {
@@ -74,18 +76,21 @@ export function DetailPanel({
   }, [initial.id, refreshKey]);
 
   // Refetches the detail after an in-panel action so the panel never shows a stale status.
-  const refreshDetail = (): void => {
+  const refreshDetail = useCallback((): void => {
     void getDocument(initial.id).then(({ status, body }) => {
       if (status === 200) {
         setDetail(body);
         setActionError(null);
       }
     });
-  };
+  }, [initial.id]);
 
   const document = detail?.document ?? initial;
   const history = detail?.history;
   const actions = user !== null ? documentActionsFor(document, user.id, user.role) : [];
+
+  // Live progress while the open document is being parsed.
+  useInterval(refreshDetail, document.status === "publishing");
 
   const runAction = async (option: DocumentActionOption): Promise<void> => {
     setBusy(true);
@@ -117,7 +122,7 @@ export function DetailPanel({
           <h2 className="truncate text-base font-semibold" title={document.name}>
             {document.name}
           </h2>
-          <StatusBadge status={document.status} progress={document.progress} />
+          <StatusBadge status={document.status} />
         </div>
         <Button variant="ghost" size="icon-sm" onClick={onCloseAction} aria-label="Close details">
           <X aria-hidden />
@@ -125,6 +130,13 @@ export function DetailPanel({
       </div>
 
       <div className="flex flex-col gap-4 overflow-y-auto p-4">
+        {document.status === "publishing" && (
+          <div className="flex flex-col gap-1.5">
+            <Progress value={document.progress} />
+            <p className="text-xs text-muted-foreground tabular-nums">{document.progress}% parsed</p>
+          </div>
+        )}
+
         {document.status === "failed" && (
           <div role="alert" className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />

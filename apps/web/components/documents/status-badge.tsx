@@ -10,21 +10,10 @@ const STATUS_VARIANTS: Record<DocumentStatus, "default" | "secondary" | "outline
   failed: "destructive",
 };
 
-export function StatusBadge({
-  status,
-  progress,
-  className,
-}: {
-  status: DocumentStatus;
-  progress?: number;
-  className?: string;
-}) {
+export function StatusBadge({ status, className }: { status: DocumentStatus; className?: string }) {
   return (
     <Badge variant={STATUS_VARIANTS[status]} className={cn("gap-1", className)}>
       {STATUS_LABELS[status]}
-      {status === "publishing" && progress !== undefined && (
-        <span className="tabular-nums">{progress}%</span>
-      )}
     </Badge>
   );
 }

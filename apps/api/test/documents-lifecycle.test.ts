@@ -324,16 +324,24 @@ describe('sweeper', () => {
     expect(body.document.last_error).toBe('Removed in RagFlow')
   })
 
-  it('RUNNING keeps the document publishing and refreshes progress', async () => {
-    const { id, cookie } = await publishingDoc()
-    const ragflowId = stub.uploads[0]?.id ?? ''
-    stub.setRun(ragflowId, 'RUNNING')
-    stub.setProgress(ragflowId, 0.5)
-    await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
-    const body = await detail(id, cookie)
-    expect(body.document.status).toBe('publishing')
-    expect(body.document.progress).toBe(50)
-    expect(body.history).toHaveLength(3) // upload + mark-ready + publish — no new row
+  it('RUNNING and UNSTART keep the document publishing and refresh progress', async () => {
+    const cookie = await memberCookie()
+    for (const [run, progress, expected] of [
+      ['RUNNING', 0.5, 50],
+      ['UNSTART', 0.12, 12],
+    ] as const) {
+      const id = await upload(cookie)
+      await act(cookie, 'mark-ready', id)
+      await act(cookie, 'publish', id)
+      const ragflowId = stub.parseTriggers.at(-1) ?? ''
+      stub.setRun(ragflowId, run)
+      stub.setProgress(ragflowId, progress)
+      await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
+      const body = await detail(id, cookie)
+      expect(body.document.status).toBe('publishing')
+      expect(body.document.progress).toBe(expected)
+      expect(body.history).toHaveLength(3) // upload + mark-ready + publish — no new row
+    }
   })
 
   it('a successful retry clears the last error', async () => {
@@ -399,6 +407,43 @@ describe('retry (owner or super admin)', () => {
     const res = await act(cookie, 'retry', id)
     expect(res.status).toBe(409)
     expect((await jsonOf<WireError>(res)).error.code).toBe('retries_exhausted')
+  })
+
+  it('an exhausted document recovers: withdraw → re-promote → re-publish completes', async () => {
+    const { id, cookie } = await failedDoc()
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await act(cookie, 'retry', id)
+      stub.setRun(stub.uploads[0]?.id ?? '', 'FAIL')
+      await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
+    }
+    const exhausted = await act(cookie, 'retry', id)
+    expect(exhausted.status).toBe(409)
+
+    expect((await act(cookie, 'withdraw', id)).status).toBe(200)
+    expect((await act(cookie, 'mark-ready', id)).status).toBe(200)
+    expect((await act(cookie, 'publish', id)).status).toBe(200)
+    stub.setRun(stub.parseTriggers.at(-1) ?? '', 'DONE')
+    await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
+
+    const body = await detail(id, cookie)
+    expect(body.document.status).toBe('published')
+    expect(body.document.retries_left).toBe(3)
+    expect(body.history.map((h) => `${h.from_status}→${h.to_status}`)).toEqual([
+      'null→draft',
+      'draft→ready',
+      'ready→publishing',
+      'publishing→failed',
+      'failed→publishing',
+      'publishing→failed',
+      'failed→publishing',
+      'publishing→failed',
+      'failed→publishing',
+      'publishing→failed',
+      'failed→draft',
+      'draft→ready',
+      'ready→publishing',
+      'publishing→published',
+    ])
   })
 
   it('forbids a non-owner member; a super admin can retry any failed document', async () => {

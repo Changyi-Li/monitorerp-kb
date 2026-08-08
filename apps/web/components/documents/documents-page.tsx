@@ -9,6 +9,7 @@ import { RowMenu } from "@/components/documents/row-menu";
 import { StatusBadge } from "@/components/documents/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import {
   deleteDocument,
   documentAction,
@@ -22,6 +23,7 @@ import {
   type DocumentStatus,
 } from "@/lib/documents";
 import { formatBytes, formatDate } from "@/lib/format";
+import { useInterval } from "@/lib/use-interval";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { cn } from "@/lib/utils";
 
@@ -106,6 +108,11 @@ export function DocumentsPage() {
 
   const loading = data === null && listError === null;
   const items = useMemo(() => data?.items ?? [], [data]);
+
+  // Live updates while anything in the corpus is being parsed (the corpus
+  // counts drive the poll so the KPI strip stays fresh even when no
+  // publishing row is on the visible page).
+  useInterval(() => setRefreshKey((k) => k + 1), (data?.counts.publishing ?? 0) > 0);
   const owners = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of items) map.set(item.owner.id, item.owner.name);
@@ -329,7 +336,10 @@ export function DocumentsPage() {
                         {document.name}
                       </td>
                       <td className="px-4 py-2.5">
-                        <StatusBadge status={document.status} progress={document.progress} />
+                        <div className="flex flex-col gap-1">
+                          <StatusBadge status={document.status} />
+                          {document.status === "publishing" && <Progress value={document.progress} className="w-28" />}
+                        </div>
                       </td>
                       <td className="px-4 py-2.5 text-muted-foreground">{document.owner.name}</td>
                       <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{formatBytes(document.size_bytes)}</td>

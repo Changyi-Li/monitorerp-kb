@@ -18,6 +18,11 @@ empty, seeds the super admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` /
 `ADMIN_NAME` (logged once). Configuration comes from `.env` (dev values
 committed) or the process environment (deployments).
 
+A single-replica in-process sweeper polls RagFlow on `POLL_INTERVAL_MS` and
+reconciles every `publishing` document's status (run state → published /
+failed / progress). Multi-replica deployments would need a distributed lock
+or outbox — explicitly out of scope for v1.
+
 ### Env vars
 
 | Variable | Purpose |

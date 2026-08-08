@@ -1,0 +1,2 @@
+# Dependencies (each app has its own .gitignore; this covers root-level tooling)
+node_modules/
