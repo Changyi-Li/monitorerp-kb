@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import postgres from 'postgres'
-import { createApp } from '../src/app.js'
+import { createConfiguredApp } from '../src/app.js'
 import type { Config } from '../src/config.js'
 import type { DB } from '../src/db/client.js'
 import { createDb } from '../src/db/client.js'
@@ -16,6 +16,9 @@ export const TEST_CONFIG: Config = {
   adminEmail: 'admin@test.local',
   adminPassword: 'test-admin-password',
   adminName: 'Test Admin',
+  ragflowUrl: 'http://127.0.0.1:1', // replaced per test suite by the RagFlow stub
+  ragflowApiKey: 'stub-key',
+  ragflowDatasetId: 'dev-dataset',
   port: 0,
 }
 
@@ -47,6 +50,6 @@ export async function truncateAll(db: DB): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE users RESTART IDENTITY CASCADE`)
 }
 
-export function makeApp(db: DB): Hono {
-  return createApp({ db, config: TEST_CONFIG })
+export function makeApp(db: DB, config: Config = TEST_CONFIG): Hono {
+  return createConfiguredApp({ db, config })
 }

@@ -1,4 +1,15 @@
-import { customType, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { sql } from 'drizzle-orm'
+import {
+  bigint,
+  customType,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core'
 
 // citext — case-insensitive text. The extension is created in the migration
 // (`CREATE EXTENSION IF NOT EXISTS "citext"`).
@@ -10,6 +21,13 @@ const citext = customType<{ data: string; driverData: string }>({
 
 export const roleEnum = pgEnum('role', ['member', 'super_admin'])
 export const accountStatusEnum = pgEnum('account_status', ['active', 'pending', 'deactivated'])
+export const documentStatusEnum = pgEnum('document_status', [
+  'draft',
+  'ready',
+  'publishing',
+  'published',
+  'failed',
+])
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -21,3 +39,51 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+// Size is stored as bigint (mode number) so multi-hundred-MB uploads are
+// exact; a 1 GiB cap is the app's own limit.
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    ext: text('ext').notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    ragflowDocumentId: text('ragflow_document_id').notNull().unique(),
+    chunkMethod: text('chunk_method').notNull().default('naive'),
+    status: documentStatusEnum('status').notNull().default('draft'),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    retryCount: integer('retry_count').notNull().default(0),
+    progress: integer('progress').notNull().default(0),
+    lastError: text('last_error'),
+    chunkCount: integer('chunk_count').notNull().default(0),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('documents_owner_id_idx').on(t.ownerId),
+    index('documents_status_idx').on(t.status),
+    index('documents_updated_at_idx').on(sql`${t.updatedAt} desc`),
+  ],
+)
+
+export const documentHistory = pgTable(
+  'document_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => users.id),
+    fromStatus: documentStatusEnum('from_status'),
+    toStatus: documentStatusEnum('to_status').notNull(),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('document_history_document_id_idx').on(t.documentId)],
+)

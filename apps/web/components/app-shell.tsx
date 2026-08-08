@@ -5,6 +5,10 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
+// Display name of the configured RagFlow dataset (config-driven per #6;
+// deployments override NEXT_PUBLIC_DATASET_NAME).
+const DATASET_NAME = process.env.NEXT_PUBLIC_DATASET_NAME ?? "monitorerp-china-internal"
+
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -57,7 +61,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <span className="text-sm font-semibold">MonitorERP KB</span>
         </div>
         <p className="truncate px-4 pb-3 text-xs text-muted-foreground" title="Dataset">
-          monitorerp-china-internal
+          {DATASET_NAME}
         </p>
         <nav className="flex flex-col gap-1 px-2" aria-label="Main">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {

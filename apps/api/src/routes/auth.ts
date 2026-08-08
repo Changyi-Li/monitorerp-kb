@@ -1,4 +1,3 @@
-import { zValidator } from '@hono/zod-validator'
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -9,6 +8,7 @@ import { SESSION_MAX_AGE_SECONDS, sessionCookieHeader, signSessionToken } from '
 import type { Deps } from '../deps.js'
 import { users } from '../db/schema.js'
 import { sendError } from '../errors.js'
+import { jsonValidator } from '../validation.js'
 
 const signUpSchema = z.object({
   name: z.string().trim().min(1, 'Name is required').max(100, 'Name must be at most 100 characters'),
@@ -20,20 +20,6 @@ const signInSchema = z.object({
   email: z.email().trim().toLowerCase(),
   password: z.string().min(1, 'Password is required'),
 })
-
-function validationFields(error: z.core.$ZodError): Record<string, string[]> {
-  return z.flattenError(error).fieldErrors as Record<string, string[]>
-}
-
-/** JSON body validation that answers with the spec's 400 envelope. */
-function jsonValidator<S extends z.ZodType>(schema: S) {
-  return zValidator('json', schema, (result, c) => {
-    if (!result.success) {
-      return sendError(c, 400, 'validation_error', 'Invalid input', validationFields(result.error))
-    }
-    return undefined
-  })
-}
 
 // Drizzle wraps driver errors as { query, params, cause }; the Postgres
 // SQLSTATE lives on the cause.

@@ -26,6 +26,7 @@ committed) or the process environment (deployments).
 | `TEST_DATABASE_URL` | Postgres connection string used by the test suite |
 | `JWT_SECRET` | HS256 key for session tokens |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | First-boot super admin seed |
+| `RAGFLOW_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_ID` | RagFlow connection (file store); dataset id from the RagFlow UI |
 | `PORT` | HTTP port (default 3001) |
 
 ## Tests

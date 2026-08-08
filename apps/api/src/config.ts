@@ -4,6 +4,9 @@ export interface Config {
   adminEmail: string
   adminPassword: string
   adminName: string
+  ragflowUrl: string
+  ragflowApiKey: string
+  ragflowDatasetId: string
   port: number
 }
 
@@ -19,6 +22,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminEmail: required('ADMIN_EMAIL'),
     adminPassword: required('ADMIN_PASSWORD'),
     adminName: env['ADMIN_NAME'] ?? 'Super Admin',
+    ragflowUrl: required('RAGFLOW_URL'),
+    ragflowApiKey: required('RAGFLOW_API_KEY'),
+    ragflowDatasetId: required('RAGFLOW_DATASET_ID'),
     port: env['PORT'] ? Number(env['PORT']) : 3001,
   }
 }

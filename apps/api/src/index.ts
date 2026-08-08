@@ -1,5 +1,5 @@
 import { serve } from '@hono/node-server'
-import { createApp } from './app.js'
+import { createConfiguredApp } from './app.js'
 import { loadConfig } from './config.js'
 import { createDb } from './db/client.js'
 import { runMigrations } from './db/migrate.js'
@@ -22,7 +22,7 @@ const seeded = await seedSuperAdmin(db, {
 })
 if (seeded) console.log(`Seeded super admin ${config.adminEmail}`)
 
-const app = createApp({ db, config })
+const app = createConfiguredApp({ db, config })
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`monitorerp-api listening on :${info.port}`)
 })
