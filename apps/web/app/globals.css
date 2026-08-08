@@ -55,7 +55,7 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --primary: rgb(0 126 189);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -66,7 +66,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --ring: rgb(0 126 189);
   --chart-1: oklch(0.809 0.105 251.813);
   --chart-2: oklch(0.623 0.214 259.815);
   --chart-3: oklch(0.546 0.245 262.881);
@@ -90,8 +90,8 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --primary: rgb(127 195 232);
+  --primary-foreground: #0b2c42;
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -101,7 +101,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --ring: rgb(127 195 232);
   --chart-1: oklch(0.809 0.105 251.813);
   --chart-2: oklch(0.623 0.214 259.815);
   --chart-3: oklch(0.546 0.245 262.881);
@@ -130,4 +130,98 @@
   html {
     @apply font-sans;
   }
+}
+
+/* PROTOTYPE — the "no motion" version: kills every animation and transition
+   inside the subtree, for comparing animated vs static. */
+.no-motion *,
+.no-motion *::before,
+.no-motion *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* PROTOTYPE — fancy levels 2-5: progressive visual richness on the winner.
+   Level classes live on the page root (fx-2 .. fx-5); effects below are
+   mostly CSS-driven so components stay lean. */
+
+@keyframes fancy-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fancy-enter {
+  animation: fancy-fade-up 0.3s ease-out both;
+}
+
+@keyframes fancy-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+.fancy-pulse {
+  animation: fancy-pulse-dot 1.4s ease-in-out infinite;
+}
+
+@keyframes fancy-shimmer-x {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Level 4: parse progress gets a moving shimmer. */
+.fx-4 [data-slot="progress-track"] {
+  position: relative;
+  overflow: hidden;
+}
+.fx-4 [data-slot="progress-track"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 40%), transparent);
+  transform: translateX(-100%);
+  animation: fancy-shimmer-x 1.8s ease-in-out infinite;
+}
+
+/* Level 4: primary buttons glow on hover. Level 5: a shine sweeps across. */
+.fx-4 [data-slot="button"].bg-primary:hover {
+  box-shadow: 0 6px 18px -6px color-mix(in oklab, var(--primary) 55%, transparent);
+}
+.fx-5 [data-slot="button"].bg-primary {
+  position: relative;
+  overflow: hidden;
+}
+.fx-5 [data-slot="button"].bg-primary::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 45%), transparent);
+  transform: translateX(-140%) skewX(-20deg);
+  pointer-events: none;
+}
+.fx-5 [data-slot="button"].bg-primary:hover::after {
+  animation: fancy-shimmer-x 0.9s ease;
+}
+
+/* Level 5: ambient gradient mesh behind the app (sits over the background). */
+.fancy-mesh {
+  background-image:
+    radial-gradient(60% 50% at 12% 8%, color-mix(in oklab, var(--primary) 14%, transparent), transparent 70%),
+    radial-gradient(50% 45% at 92% 15%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 70%),
+    radial-gradient(65% 60% at 50% 105%, color-mix(in oklab, var(--primary) 10%, transparent), transparent 72%);
 }
