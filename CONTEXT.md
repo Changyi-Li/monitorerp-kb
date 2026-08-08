@@ -20,6 +20,10 @@ _Avoid_: admin
 The act of a super admin enabling a registered but inactive account. Newly signed-up users are inactive until activated; the first account is seeded as an activated super admin.
 _Avoid_: approval, verification
 
+**Account status**:
+Whether a User can sign in: `active`, `pending` (signed up, awaiting activation), or `deactivated` (cannot sign in; reactivation restores access). There is no account deletion in v1 — deactivation is the removal mechanism.
+_Avoid_: state, flag
+
 **Document**:
 A managed file together with its metadata and history, owned by the user who uploaded it. Only the owner edits, deletes, or changes its status; any user can view or download it.
 _Avoid_: doc, file
@@ -39,3 +43,7 @@ _Avoid_: push, deploy, sync
 **Withdraw**:
 The act of moving a Document back to draft: the file stays in RagFlow, its parse data (chunks) is removed, and it is parsed again when re-published. Available to the owner for their own Documents and to any super admin; the way to return a failed Document to `ready` after retries are exhausted, and the way to take a published Document out of retrieval.
 _Avoid_: unpublish, retract
+
+**Document history**:
+The chronological record of a Document's status transitions — who moved it, from which status to which, when, and why (the note). Shown on the Document detail screen.
+_Avoid_: audit log, activity
