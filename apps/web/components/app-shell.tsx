@@ -17,8 +17,12 @@ import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
   { href: "/", label: "Documents", icon: FileText },
-  { href: "/users", label: "Users", icon: Users },
+  { href: "/users", label: "Users", icon: Users, adminOnly: true },
 ] as const
+
+// The Users screen is super-admin only (the API answers 403 for members).
+const visibleNavItems = (role: User["role"] | undefined): Array<(typeof NAV_ITEMS)[number]> =>
+  NAV_ITEMS.filter((item) => !("adminOnly" in item) || item.adminOnly !== true || role === "super_admin")
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -64,7 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {DATASET_NAME}
         </p>
         <nav className="flex flex-col gap-1 px-2" aria-label="Main">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+          {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href)
             return (
               <Link

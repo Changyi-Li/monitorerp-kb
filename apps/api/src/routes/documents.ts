@@ -19,12 +19,11 @@ import {
   sanitizeFilename,
   utf8ByteLength,
 } from '../ragflow/files.js'
+import { isUuid } from '../ids.js'
 import { queryValidator } from '../validation.js'
 
 const MAX_RETRIES = 3
 const DEFAULT_PAGE_SIZE = 20
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const listQuerySchema = z.object({
   status: z.enum(['draft', 'ready', 'publishing', 'published', 'failed']).optional(),
@@ -154,7 +153,7 @@ export function documentsRoutes(deps: Deps) {
   // GET /documents/:id — detail with history.
   app.get('/:id', async (c) => {
     const id = c.req.param('id')
-    if (!UUID_RE.test(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
     const row = await findDocumentWithOwner(deps.db, id)
     if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
     const history = await deps.db
@@ -187,7 +186,7 @@ export function documentsRoutes(deps: Deps) {
   // GET /documents/:id/download — proxy-streams RagFlow's file in any status.
   app.get('/:id/download', async (c) => {
     const id = c.req.param('id')
-    if (!UUID_RE.test(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
     const row = await findDocumentWithOwner(deps.db, id)
     if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
     let upstream: Response

@@ -8,6 +8,8 @@ export type ErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'duplicate_email'
+  | 'wrong_status'
+  | 'last_admin'
   | 'payload_too_large'
   | 'upstream_error'
   | 'internal'

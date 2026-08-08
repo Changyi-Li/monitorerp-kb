@@ -4,11 +4,13 @@ import { sendError } from './errors.js'
 import { createRagflowClient } from './ragflow/client.js'
 import { authRoutes } from './routes/auth.js'
 import { documentsRoutes } from './routes/documents.js'
+import { usersRoutes } from './routes/users.js'
 
 export function createApp(deps: Deps): Hono {
   const app = new Hono()
   app.route('/auth', authRoutes(deps))
   app.route('/documents', documentsRoutes(deps))
+  app.route('/users', usersRoutes(deps))
   app.notFound((c) => sendError(c, 404, 'not_found', 'Not found'))
   app.onError((err, c) => {
     console.error(err)
