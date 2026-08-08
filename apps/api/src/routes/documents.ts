@@ -9,6 +9,8 @@ import type { DB } from '../db/client.js'
 import { documentHistory, documents, users } from '../db/schema.js'
 import type { Deps } from '../deps.js'
 import { sendError } from '../errors.js'
+import { recordDocumentTransition } from '../history.js'
+import { isUuid } from '../ids.js'
 import { RagflowError, type RagflowClient, type RagflowUploadInput, type RagflowUploadResult } from '../ragflow/client.js'
 import {
   deriveChunkMethod,
@@ -18,8 +20,8 @@ import {
   MAX_UPLOAD_BYTES,
   sanitizeFilename,
   utf8ByteLength,
+  withdrawChunkMethod,
 } from '../ragflow/files.js'
-import { isUuid } from '../ids.js'
 import { queryValidator } from '../validation.js'
 
 const MAX_RETRIES = 3
@@ -47,6 +49,7 @@ export interface DocumentShape {
   chunk_count: number
   chunk_method: string
   retries_left: number
+  last_error: string | null
   created_at: string
   updated_at: string
   published_at?: string
@@ -65,6 +68,7 @@ export function documentShape(document: DocumentRow, ownerName: string): Documen
     chunk_count: document.chunkCount,
     chunk_method: document.chunkMethod,
     retries_left: Math.max(0, MAX_RETRIES - document.retryCount),
+    last_error: document.lastError,
     created_at: document.createdAt.toISOString(),
     updated_at: document.updatedAt.toISOString(),
     ...(document.publishedAt !== null ? { published_at: document.publishedAt.toISOString() } : {}),
@@ -167,20 +171,213 @@ export function documentsRoutes(deps: Deps) {
         createdAt: documentHistory.createdAt,
       })
       .from(documentHistory)
-      .innerJoin(users, eq(documentHistory.actorId, users.id))
+      // Sweeper (system) transitions have no actor — left join keeps them.
+      .leftJoin(users, eq(documentHistory.actorId, users.id))
       .where(eq(documentHistory.documentId, id))
       .orderBy(asc(documentHistory.createdAt))
     return c.json({
       document: documentShape(row.document, row.ownerName),
       history: history.map((h) => ({
         id: h.id,
-        actor: { id: h.actorId, name: h.actorName },
+        actor: h.actorId !== null ? { id: h.actorId, name: h.actorName } : null,
         from_status: h.fromStatus,
         to_status: h.toStatus,
         note: h.note,
         created_at: h.createdAt.toISOString(),
       })),
     })
+  })
+
+  // POST /documents/:id/mark-ready — owner only; draft → ready.
+  app.post('/:id/mark-ready', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    const row = await findDocumentWithOwner(deps.db, id)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
+    if (row.document.ownerId !== user.id) {
+      return sendError(c, 403, 'forbidden', 'Only the owner can mark a document ready')
+    }
+    if (row.document.status !== 'draft') {
+      return sendError(c, 409, 'wrong_status', 'Only draft documents can be marked ready')
+    }
+    await deps.db
+      .update(documents)
+      .set({ status: 'ready', updatedAt: new Date() })
+      .where(eq(documents.id, id))
+    await recordDocumentTransition(deps.db, {
+      documentId: id,
+      actorId: user.id,
+      fromStatus: 'draft',
+      toStatus: 'ready',
+      note: 'Marked ready',
+    })
+    const updated = await findDocumentWithOwner(deps.db, id)
+    if (updated === undefined) throw new Error('document vanished after transition')
+    return c.json({ document: documentShape(updated.document, updated.ownerName) })
+  })
+
+  // POST /documents/:id/publish — owner or super admin; ready → publishing.
+  app.post('/:id/publish', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    const row = await findDocumentWithOwner(deps.db, id)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
+    if (row.document.ownerId !== user.id && user.role !== 'super_admin') {
+      return sendError(c, 403, 'forbidden', 'Only the owner or a super admin can publish')
+    }
+    if (row.document.status !== 'ready') {
+      return sendError(c, 409, 'wrong_status', 'Only ready documents can be published')
+    }
+    try {
+      // If RagFlow's current chunk method drifted from the stored one
+      // (e.g. after a withdraw), restore it first — the PUT resets the doc.
+      const states = await ragflow.listDocuments()
+      const current = states.find((s) => s.id === row.document.ragflowDocumentId)
+      if (current !== undefined && current.chunkMethod !== row.document.chunkMethod) {
+        await ragflow.setChunkMethod(row.document.ragflowDocumentId, row.document.chunkMethod)
+      }
+      await ragflow.triggerParse(row.document.ragflowDocumentId)
+    } catch (err) {
+      if (err instanceof RagflowError) {
+        // Upstream failure — the document stays ready.
+        return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      }
+      throw err
+    }
+    await deps.db
+      .update(documents)
+      .set({ status: 'publishing', updatedAt: new Date() })
+      .where(eq(documents.id, id))
+    await recordDocumentTransition(deps.db, {
+      documentId: id,
+      actorId: user.id,
+      fromStatus: 'ready',
+      toStatus: 'publishing',
+      note: 'Published',
+    })
+    const updated = await findDocumentWithOwner(deps.db, id)
+    if (updated === undefined) throw new Error('document vanished after transition')
+    return c.json({ document: documentShape(updated.document, updated.ownerName) })
+  })
+
+  // POST /documents/:id/retry — owner or super admin; failed → publishing.
+  app.post('/:id/retry', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    const row = await findDocumentWithOwner(deps.db, id)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
+    if (row.document.ownerId !== user.id && user.role !== 'super_admin') {
+      return sendError(c, 403, 'forbidden', 'Only the owner or a super admin can retry')
+    }
+    if (row.document.status !== 'failed') {
+      return sendError(c, 409, 'wrong_status', 'Only failed documents can be retried')
+    }
+    if (row.document.retryCount >= MAX_RETRIES) {
+      return sendError(c, 409, 'retries_exhausted', 'No retries left — withdraw and promote again')
+    }
+    try {
+      await ragflow.triggerParse(row.document.ragflowDocumentId)
+    } catch (err) {
+      if (err instanceof RagflowError) {
+        return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      }
+      throw err
+    }
+    await deps.db
+      .update(documents)
+      .set({ status: 'publishing', retryCount: row.document.retryCount + 1, updatedAt: new Date() })
+      .where(eq(documents.id, id))
+    await recordDocumentTransition(deps.db, {
+      documentId: id,
+      actorId: user.id,
+      fromStatus: 'failed',
+      toStatus: 'publishing',
+      note: `Retry ${row.document.retryCount + 1}`,
+    })
+    const updated = await findDocumentWithOwner(deps.db, id)
+    if (updated === undefined) throw new Error('document vanished after transition')
+    return c.json({ document: documentShape(updated.document, updated.ownerName) })
+  })
+
+  // POST /documents/:id/withdraw — owner or super admin; published/failed → draft.
+  app.post('/:id/withdraw', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    const row = await findDocumentWithOwner(deps.db, id)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
+    if (row.document.ownerId !== user.id && user.role !== 'super_admin') {
+      return sendError(c, 403, 'forbidden', 'Only the owner or a super admin can withdraw')
+    }
+    if (row.document.status !== 'published' && row.document.status !== 'failed') {
+      return sendError(c, 409, 'wrong_status', 'Only published or failed documents can be withdrawn')
+    }
+    try {
+      // Parser flip: PUT a chunk method that differs from RagFlow's CURRENT
+      // method (a same-value PUT is a no-op) — RagFlow keeps the file and
+      // purges the parse data. The stored method is restored on publish.
+      const states = await ragflow.listDocuments()
+      const current = states.find((s) => s.id === row.document.ragflowDocumentId)?.chunkMethod ?? null
+      let flip = withdrawChunkMethod(row.document.chunkMethod)
+      if (current !== null && current === flip) flip = withdrawChunkMethod(flip)
+      await ragflow.setChunkMethod(row.document.ragflowDocumentId, flip)
+    } catch (err) {
+      if (err instanceof RagflowError) {
+        return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      }
+      throw err
+    }
+    await deps.db
+      .update(documents)
+      .set({
+        status: 'draft',
+        retryCount: 0,
+        chunkCount: 0,
+        publishedAt: null,
+        progress: 0,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(documents.id, id))
+    await recordDocumentTransition(deps.db, {
+      documentId: id,
+      actorId: user.id,
+      fromStatus: row.document.status,
+      toStatus: 'draft',
+      note: 'Withdrawn',
+    })
+    const updated = await findDocumentWithOwner(deps.db, id)
+    if (updated === undefined) throw new Error('document vanished after transition')
+    return c.json({ document: documentShape(updated.document, updated.ownerName) })
+  })
+
+  // DELETE /documents/:id — owner or super admin; RagFlow first, then the row.
+  app.delete('/:id', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
+    const row = await findDocumentWithOwner(deps.db, id)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
+    if (row.document.ownerId !== user.id && user.role !== 'super_admin') {
+      return sendError(c, 403, 'forbidden', 'Only the owner or a super admin can delete')
+    }
+    if (row.document.status === 'publishing') {
+      return sendError(c, 409, 'publishing', 'Cannot delete a document while it is being parsed')
+    }
+    try {
+      await ragflow.deleteDocument(row.document.ragflowDocumentId)
+    } catch (err) {
+      if (err instanceof RagflowError) {
+        return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      }
+      throw err
+    }
+    // History rows cascade with the document row.
+    await deps.db.delete(documents).where(eq(documents.id, id))
+    return c.body(null, 204)
   })
 
   // GET /documents/:id/download — proxy-streams RagFlow's file in any status.

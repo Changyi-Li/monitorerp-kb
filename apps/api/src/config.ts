@@ -7,6 +7,7 @@ export interface Config {
   ragflowUrl: string
   ragflowApiKey: string
   ragflowDatasetId: string
+  pollIntervalMs: number
   port: number
 }
 
@@ -25,6 +26,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ragflowUrl: required('RAGFLOW_URL'),
     ragflowApiKey: required('RAGFLOW_API_KEY'),
     ragflowDatasetId: required('RAGFLOW_DATASET_ID'),
+    pollIntervalMs: env['POLL_INTERVAL_MS'] ? Number(env['POLL_INTERVAL_MS']) : 5000,
     port: env['PORT'] ? Number(env['PORT']) : 3001,
   }
 }

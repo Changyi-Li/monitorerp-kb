@@ -8,27 +8,77 @@ export interface StoredUpload {
   name: string
   sizeBytes: number
   content: Buffer
-  run: 'UNSTART'
-  chunkCount: 0
+  run: string
+  chunkCount: number
+  progress: number
+  progressMsg: string | null
+  chunkMethod: string
+}
+
+export interface ChunkMethodCall {
+  documentId: string
+  method: string
 }
 
 export interface RagflowStub {
   url: string
   uploads: StoredUpload[]
+  chunkMethodCalls: ChunkMethodCall[]
+  parseTriggers: string[]
   failUploads: boolean
   failDownloads: boolean
+  failDeletes: boolean
+  failParse: boolean
+  failChunkMethodPut: boolean
+  failList: boolean
+  setRun: (id: string, run: string) => void
+  setProgress: (id: string, progress: number) => void
+  setProgressMsg: (id: string, message: string) => void
+  setChunkMethodState: (id: string, method: string) => void
   close: () => Promise<void>
 }
 
 /**
  * In-process stand-in for the RagFlow HTTP API (per the testing decision:
- * "RagFlow is faked at the HTTP client boundary"). Implements upload
- * (creates an unparsed document) and document download. Mutable failure
- * flags let tests exercise the 502 paths.
+ * "RagFlow is faked at the HTTP client boundary"). Implements upload (creates
+ * an unparsed document), list (with run/progress state), download, the
+ * chunk_method PUT (parser flip), the parse trigger, and delete. Tests drive
+ * sweeper transitions by mutating the stub's run state, then assert through
+ * the API.
  */
 export async function startRagflowStub(): Promise<RagflowStub> {
   const uploads: StoredUpload[] = []
-  const stub: RagflowStub = { url: '', uploads, failUploads: false, failDownloads: false, close: () => Promise.resolve() }
+  const chunkMethodCalls: ChunkMethodCall[] = []
+  const parseTriggers: string[] = []
+  const stub: RagflowStub = {
+    url: '',
+    uploads,
+    chunkMethodCalls,
+    parseTriggers,
+    failUploads: false,
+    failDownloads: false,
+    failDeletes: false,
+    failParse: false,
+    failChunkMethodPut: false,
+    failList: false,
+    setRun: (id, run) => {
+      const upload = uploads.find((u) => u.id === id)
+      if (upload !== undefined) upload.run = run
+    },
+    setProgress: (id, progress) => {
+      const upload = uploads.find((u) => u.id === id)
+      if (upload !== undefined) upload.progress = progress
+    },
+    setProgressMsg: (id, message) => {
+      const upload = uploads.find((u) => u.id === id)
+      if (upload !== undefined) upload.progressMsg = message
+    },
+    setChunkMethodState: (id, method) => {
+      const upload = uploads.find((u) => u.id === id)
+      if (upload !== undefined) upload.chunkMethod = method
+    },
+    close: () => Promise.resolve(),
+  }
 
   const server: Server = createServer((req, res) => {
     void handle(req, res)
@@ -36,26 +86,54 @@ export async function startRagflowStub(): Promise<RagflowStub> {
 
   async function handle(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
-    const match = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/documents(?:\/([^/]+))?$/)
-    if (match === null) {
-      res.writeHead(404, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code: 102, message: 'not found' }))
+    const chunksMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/chunks$/)
+    const docMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/documents(?:\/([^/]+))?$/)
+    const fail = (code: number, message: string): void => {
+      res.writeHead(code, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ code, message }))
+    }
+
+    if (chunksMatch !== null && req.method === 'POST') {
+      if (stub.failParse) return fail(500, 'simulated parse failure')
+      const documentId = url.searchParams.get('document_id')
+      if (documentId === null || !uploads.some((u) => u.id === documentId)) return fail(404, 'document not found')
+      parseTriggers.push(documentId)
+      const upload = uploads.find((u) => u.id === documentId)
+      if (upload !== undefined) {
+        upload.run = 'RUNNING'
+        upload.progress = 0
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ code: 0, data: { chunk_count: 0 } }))
       return
     }
-    const documentId = match[2]
+
+    if (docMatch !== null && req.method === 'GET' && docMatch[2] === undefined) {
+      if (stub.failList) return fail(500, 'simulated list failure')
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          code: 0,
+          data: uploads.map((u) => ({
+            id: u.id,
+            name: u.name,
+            run: u.run,
+            progress: u.progress,
+            chunk_count: u.chunkCount,
+            progress_msg: u.progressMsg,
+            chunk_method: u.chunkMethod,
+          })),
+        }),
+      )
+      return
+    }
+
+    const documentId = docMatch?.[2]
 
     if (req.method === 'POST' && documentId === undefined) {
-      if (stub.failUploads) {
-        res.writeHead(500, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 101, message: 'simulated upstream failure' }))
-        return
-      }
+      if (stub.failUploads) return fail(500, 'simulated upstream failure')
       const parsed = await parseUpload(req)
-      if (parsed === null) {
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 103, message: 'missing file' }))
-        return
-      }
+      if (parsed === null) return fail(400, 'missing file')
       const stored: StoredUpload = {
         id: randomUUID(),
         name: parsed.name,
@@ -63,6 +141,9 @@ export async function startRagflowStub(): Promise<RagflowStub> {
         content: parsed.content,
         run: 'UNSTART',
         chunkCount: 0,
+        progress: 0,
+        progressMsg: null,
+        chunkMethod: 'naive',
       }
       uploads.push(stored)
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -75,38 +156,52 @@ export async function startRagflowStub(): Promise<RagflowStub> {
       return
     }
 
+    if (req.method === 'PUT' && documentId !== undefined) {
+      if (stub.failChunkMethodPut) return fail(500, 'simulated chunk method failure')
+      const upload = uploads.find((u) => u.id === documentId)
+      if (upload === undefined) return fail(404, 'document not found')
+      const body = await readBody(req)
+      const payload = JSON.parse(body) as { chunk_method?: string }
+      const method = payload.chunk_method
+      if (typeof method !== 'string') return fail(400, 'chunk_method required')
+      chunkMethodCalls.push({ documentId, method })
+      // Parser flip: the file is kept, parse data is purged.
+      upload.chunkMethod = method
+      upload.run = 'UNSTART'
+      upload.chunkCount = 0
+      upload.progress = 0
+      upload.progressMsg = null
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ code: 0 }))
+      return
+    }
+
     if (req.method === 'GET' && documentId !== undefined) {
-      if (stub.failDownloads) {
-        res.writeHead(500, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 101, message: 'simulated upstream failure' }))
-        return
-      }
+      if (stub.failDownloads) return fail(500, 'simulated upstream failure')
       const stored = uploads.find((u) => u.id === documentId)
-      if (stored === undefined) {
-        res.writeHead(404, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: 'document not found' }))
-        return
-      }
+      if (stored === undefined) return fail(404, 'document not found')
       res.writeHead(200, { 'content-type': 'application/octet-stream' })
       res.end(stored.content)
       return
     }
 
     if (req.method === 'DELETE' && documentId !== undefined) {
+      if (stub.failDeletes) return fail(500, 'simulated delete failure')
       const index = uploads.findIndex((u) => u.id === documentId)
-      if (index === -1) {
-        res.writeHead(404, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: 'document not found' }))
-        return
-      }
+      if (index === -1) return fail(404, 'document not found')
       uploads.splice(index, 1)
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ code: 0 }))
       return
     }
 
-    res.writeHead(405, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ code: 104, message: 'method not allowed' }))
+    return fail(405, 'method not allowed')
+  }
+
+  async function readBody(req: import('node:http').IncomingMessage): Promise<string> {
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(chunk as Buffer)
+    return Buffer.concat(chunks).toString('utf8')
   }
 
   async function parseUpload(req: import('node:http').IncomingMessage): Promise<{ name: string; content: Buffer } | null> {

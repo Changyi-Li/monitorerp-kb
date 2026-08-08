@@ -1,0 +1,1 @@
+ALTER TABLE "document_history" ALTER COLUMN "actor_id" DROP NOT NULL;

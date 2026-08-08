@@ -20,9 +20,21 @@ export interface RagflowUploadResult {
   chunkCount: number
 }
 
+export interface RagflowDocumentState {
+  id: string
+  run: string
+  progress: number
+  chunkCount: number
+  progressMsg: string | null
+  chunkMethod: string
+}
+
 export interface RagflowClient {
   uploadDocument(input: RagflowUploadInput): Promise<RagflowUploadResult>
+  listDocuments(): Promise<RagflowDocumentState[]>
   downloadDocument(documentId: string): Promise<Response>
+  setChunkMethod(documentId: string, chunkMethod: string): Promise<void>
+  triggerParse(documentId: string): Promise<void>
   deleteDocument(documentId: string): Promise<void>
 }
 
@@ -31,12 +43,23 @@ interface RagflowDocumentPayload {
   data?: { id?: string; name?: string; size?: number; chunk_count?: number; run?: string }
 }
 
+interface RagflowListItemPayload {
+  code?: number
+  data?: Array<{
+    id?: string
+    run?: string
+    progress?: number
+    chunk_count?: number
+    progress_msg?: string
+    chunk_method?: string
+  }>
+}
+
 /**
  * HTTP client for a self-hosted RagFlow instance. RagFlow is the file store:
- * an upload creates the document unparsed (`run: UNSTART`) and never queues
- * a parse — parsing only starts on publish (a later ticket). The dataset is
- * fixed at deployment (the app never manages datasets), so the client
- * captures it.
+ * an upload creates the document unparsed (`run: UNSTART`) and parsing only
+ * starts on publish. The dataset is fixed at deployment (the app never
+ * manages datasets), so the client captures it.
  */
 export function createRagflowClient(config: Config): RagflowClient {
   const base = new URL(config.ragflowUrl)
@@ -44,6 +67,16 @@ export function createRagflowClient(config: Config): RagflowClient {
   const documentsUrl = () => new URL(`/api/v1/datasets/${config.ragflowDatasetId}/documents`, base)
   const documentUrl = (documentId: string) =>
     new URL(`/api/v1/datasets/${config.ragflowDatasetId}/documents/${documentId}`, base)
+  const chunksUrl = () => new URL(`/api/v1/datasets/${config.ragflowDatasetId}/chunks`, base)
+
+  /** Wraps a fetch so network failures surface as RagflowError. */
+  const guardedFetch = async (url: URL, init: RequestInit): Promise<Response> => {
+    try {
+      return await fetch(url, { ...init, headers: { authorization: authHeader, ...init.headers } })
+    } catch (err) {
+      throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
+    }
+  }
 
   return {
     async uploadDocument({ stream, filename, mimeType }) {
@@ -59,20 +92,12 @@ export function createRagflowClient(config: Config): RagflowClient {
         body.end()
       })
 
-      let upstream: Response
-      try {
-        upstream = await fetch(documentsUrl(), {
-          method: 'POST',
-          headers: {
-            authorization: authHeader,
-            'content-type': `multipart/form-data; boundary=${boundary}`,
-          },
-          body: body as unknown as NonNullable<RequestInit['body']>,
-          duplex: 'half',
-        })
-      } catch (err) {
-        throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
-      }
+      const upstream = await guardedFetch(documentsUrl(), {
+        method: 'POST',
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        body: body as unknown as NonNullable<RequestInit['body']>,
+        duplex: 'half',
+      })
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow upload failed with status ${upstream.status}`, upstream.status)
       }
@@ -86,26 +111,54 @@ export function createRagflowClient(config: Config): RagflowClient {
       }
     },
 
+    async listDocuments() {
+      const upstream = await guardedFetch(documentsUrl(), { method: 'GET' })
+      if (!upstream.ok) {
+        throw new RagflowError(`RagFlow list failed with status ${upstream.status}`, upstream.status)
+      }
+      const payload = (await upstream.json()) as RagflowListItemPayload
+      if (payload.code !== 0 || payload.data === undefined) {
+        throw new RagflowError('RagFlow returned an error payload')
+      }
+      return payload.data
+        .filter((item) => item.id !== undefined)
+        .map((item) => ({
+          id: item.id as string,
+          run: item.run ?? 'UNSTART',
+          progress: item.progress ?? 0,
+          chunkCount: item.chunk_count ?? 0,
+          progressMsg: item.progress_msg ?? null,
+          chunkMethod: item.chunk_method ?? 'naive',
+        }))
+    },
+
     async downloadDocument(documentId) {
-      try {
-        return await fetch(documentUrl(documentId), {
-          headers: { authorization: authHeader },
-        })
-      } catch (err) {
-        throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
+      return await guardedFetch(documentUrl(documentId), { method: 'GET' })
+    },
+
+    // A chunk_method PUT resets the document: parse data purged, file kept.
+    async setChunkMethod(documentId, chunkMethod) {
+      const upstream = await guardedFetch(documentUrl(documentId), {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chunk_method: chunkMethod }),
+      })
+      if (!upstream.ok) {
+        throw new RagflowError(`RagFlow chunk method update failed with status ${upstream.status}`, upstream.status)
+      }
+    },
+
+    async triggerParse(documentId) {
+      const url = chunksUrl()
+      url.searchParams.set('document_id', documentId)
+      const upstream = await guardedFetch(url, { method: 'POST' })
+      if (!upstream.ok) {
+        throw new RagflowError(`RagFlow parse trigger failed with status ${upstream.status}`, upstream.status)
       }
     },
 
     async deleteDocument(documentId) {
-      let upstream: Response
-      try {
-        upstream = await fetch(documentUrl(documentId), {
-          method: 'DELETE',
-          headers: { authorization: authHeader },
-        })
-      } catch (err) {
-        throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
-      }
+      const upstream = await guardedFetch(documentUrl(documentId), { method: 'DELETE' })
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow delete failed with status ${upstream.status}`, upstream.status)
       }

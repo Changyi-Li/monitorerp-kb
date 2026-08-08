@@ -15,6 +15,13 @@
       "when": 1786191517220,
       "tag": "0001_orange_nitro",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786201488794,
+      "tag": "0002_deep_silver_centurion",
+      "breakpoints": true
     }
   ]
 }

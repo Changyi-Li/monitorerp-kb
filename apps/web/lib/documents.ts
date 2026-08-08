@@ -28,6 +28,7 @@ export interface DocumentItem {
   chunk_count: number;
   chunk_method: string;
   retries_left: number;
+  last_error: string | null;
   created_at: string;
   updated_at: string;
   published_at?: string;
@@ -85,6 +86,63 @@ export function getDocument(id: string): Promise<ApiResult<DocumentDetail>> {
 export interface UploadResult {
   document?: DocumentItem;
   error?: ApiErrorBody["error"];
+}
+
+export type DocumentAction = "mark-ready" | "publish" | "retry" | "withdraw";
+
+export interface DocumentActionResult {
+  document?: DocumentItem;
+  error?: ApiErrorBody["error"];
+}
+
+export function documentAction(
+  id: string,
+  action: DocumentAction,
+): Promise<ApiResult<DocumentActionResult>> {
+  return apiJson<DocumentActionResult>(`/api/documents/${id}/${action}`, { method: "POST" });
+}
+
+export async function deleteDocument(id: string): Promise<ApiResult<DocumentActionResult>> {
+  const res = await fetch(`/api/documents/${id}`, { method: "DELETE" });
+  const body = ((await res.json().catch(() => undefined)) as DocumentActionResult | undefined) ?? {};
+  return { status: res.status, body };
+}
+
+export interface DocumentActionOption {
+  label: string;
+  action: DocumentAction | "delete";
+  destructive?: boolean;
+}
+
+/**
+ * The actions a user may take on a document, mirroring the locked permission
+ * matrix: non-owner members see download only; mark-ready is owner-only;
+ * publish/retry/withdraw/delete are owner-or-super-admin.
+ */
+export function documentActionsFor(document: DocumentItem, userId: string, role: string): DocumentActionOption[] {
+  if (document.status === "publishing") return [];
+  const isOwner = document.owner.id === userId;
+  const isAdmin = role === "super_admin";
+  if (!isOwner && !isAdmin) return [];
+
+  const actions: DocumentActionOption[] = [];
+  switch (document.status) {
+    case "draft":
+      if (isOwner) actions.push({ label: "Mark ready", action: "mark-ready" });
+      break;
+    case "ready":
+      actions.push({ label: "Publish", action: "publish" });
+      break;
+    case "failed":
+      actions.push({ label: "Retry", action: "retry" });
+      actions.push({ label: "Withdraw", action: "withdraw" });
+      break;
+    case "published":
+      actions.push({ label: "Withdraw", action: "withdraw" });
+      break;
+  }
+  actions.push({ label: "Delete", action: "delete", destructive: true });
+  return actions;
 }
 
 /** Multipart upload — no JSON content-type; fetch sets the boundary. */

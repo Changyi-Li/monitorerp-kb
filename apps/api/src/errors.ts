@@ -9,6 +9,8 @@ export type ErrorCode =
   | 'not_found'
   | 'duplicate_email'
   | 'wrong_status'
+  | 'retries_exhausted'
+  | 'publishing'
   | 'last_admin'
   | 'payload_too_large'
   | 'upstream_error'

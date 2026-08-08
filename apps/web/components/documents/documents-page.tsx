@@ -5,17 +5,24 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DetailPanel } from "@/components/documents/detail-panel";
+import { RowMenu } from "@/components/documents/row-menu";
 import { StatusBadge } from "@/components/documents/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  deleteDocument,
+  documentAction,
+  documentActionsFor,
   listDocuments,
   STATUS_LABELS,
   uploadDocument,
+  type DocumentActionOption,
+  type DocumentItem,
   type DocumentListResult,
   type DocumentStatus,
 } from "@/lib/documents";
 import { formatBytes, formatDate } from "@/lib/format";
+import { useCurrentUser } from "@/lib/use-current-user";
 import { cn } from "@/lib/utils";
 
 const STATUS_TABS: Array<{ value: DocumentStatus | "all"; label: string }> = [
@@ -44,9 +51,13 @@ export function DocumentsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [listError, setListError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [busyDocId, setBusyDocId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const user = useCurrentUser();
 
   // Filters reset to the first page. Called from the filter handlers so the
   // page state stays in sync without an effect.
@@ -152,6 +163,29 @@ export function DocumentsPage() {
 
   const detailDocument = detailId !== null ? (items.find((d) => d.id === detailId) ?? null) : null;
 
+  const runAction = async (document: DocumentItem, option: DocumentActionOption): Promise<void> => {
+    setBusyDocId(document.id);
+    setActionError(null);
+    if (option.action === "delete") {
+      const result = await deleteDocument(document.id);
+      if (result.status === 204) {
+        setDetailId((current) => (current === document.id ? null : current));
+        setRefreshKey((k) => k + 1);
+      } else {
+        setActionError(result.body.error?.message ?? "Could not delete the document");
+      }
+    } else {
+      const result = await documentAction(document.id, option.action);
+      if (result.status === 200) {
+        setRefreshKey((k) => k + 1);
+        setDetailRefreshKey((k) => k + 1);
+      } else {
+        setActionError(result.body.error?.message ?? `Could not ${option.label.toLowerCase()} the document`);
+      }
+    }
+    setBusyDocId(null);
+  };
+
   return (
     <>
       <header className="flex items-center justify-between gap-4 border-b px-6 py-4">
@@ -176,9 +210,9 @@ export function DocumentsPage() {
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
-          {(uploadError !== null || listError !== null) && (
+          {(uploadError !== null || listError !== null || actionError !== null) && (
             <p role="alert" className="border-b px-6 py-2 text-sm text-destructive">
-              {uploadError ?? listError}
+              {actionError ?? uploadError ?? listError}
             </p>
           )}
 
@@ -300,16 +334,25 @@ export function DocumentsPage() {
                       <td className="px-4 py-2.5 text-muted-foreground">{document.owner.name}</td>
                       <td className="px-4 py-2.5 tabular-nums text-muted-foreground">{formatBytes(document.size_bytes)}</td>
                       <td className="px-4 py-2.5 text-muted-foreground">{formatDate(document.updated_at)}</td>
-                      <td className="px-4 py-2.5 text-right">
-                        <a
-                          href={`/api/documents/${document.id}/download`}
-                          aria-label={`Download ${document.name}`}
-                          title="Download"
-                          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Download className="size-4" aria-hidden />
-                        </a>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end gap-1">
+                          {user !== null && (
+                            <RowMenu
+                              actions={documentActionsFor(document, user.id, user.role)}
+                              busy={busyDocId === document.id}
+                              onAction={(option) => void runAction(document, option)}
+                            />
+                          )}
+                          <a
+                            href={`/api/documents/${document.id}/download`}
+                            aria-label={`Download ${document.name}`}
+                            title="Download"
+                            className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Download className="size-4" aria-hidden />
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -343,7 +386,13 @@ export function DocumentsPage() {
         </div>
 
         {detailDocument !== null && (
-          <DetailPanel document={detailDocument} onCloseAction={() => setDetailId(null)} />
+          <DetailPanel
+            document={detailDocument}
+            user={user}
+            refreshKey={detailRefreshKey}
+            onCloseAction={() => setDetailId(null)}
+            onChangedAction={() => setRefreshKey((k) => k + 1)}
+          />
         )}
       </div>
     </>

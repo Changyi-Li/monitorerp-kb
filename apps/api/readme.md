@@ -27,6 +27,7 @@ committed) or the process environment (deployments).
 | `JWT_SECRET` | HS256 key for session tokens |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | First-boot super admin seed |
 | `RAGFLOW_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_ID` | RagFlow connection (file store); dataset id from the RagFlow UI |
+| `POLL_INTERVAL_MS` | Sweeper poll interval (default 5000) — reconciles publishing documents with RagFlow's parse state |
 | `PORT` | HTTP port (default 3001) |
 
 ## Tests

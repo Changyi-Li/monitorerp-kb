@@ -19,6 +19,7 @@ export const TEST_CONFIG: Config = {
   ragflowUrl: 'http://127.0.0.1:1', // replaced per test suite by the RagFlow stub
   ragflowApiKey: 'stub-key',
   ragflowDatasetId: 'dev-dataset',
+  pollIntervalMs: 0, // tests drive the sweeper explicitly
   port: 0,
 }
 

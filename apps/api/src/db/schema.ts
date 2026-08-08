@@ -77,9 +77,8 @@ export const documentHistory = pgTable(
     documentId: uuid('document_id')
       .notNull()
       .references(() => documents.id, { onDelete: 'cascade' }),
-    actorId: uuid('actor_id')
-      .notNull()
-      .references(() => users.id),
+    // Nullable: sweeper (system) transitions have no acting user.
+    actorId: uuid('actor_id').references(() => users.id),
     fromStatus: documentStatusEnum('from_status'),
     toStatus: documentStatusEnum('to_status').notNull(),
     note: text('note'),

@@ -40,3 +40,12 @@ export function deriveChunkMethod(ext: string): string {
 export function sanitizeFilename(filename: string): string {
   return filename.replace(/[\r\n"]/g, '')
 }
+
+/**
+ * A chunk method that is guaranteed to differ from the stored one, used by
+ * withdraw's parser-flip reset (a same-value PUT would be a no-op). The
+ * stored method is restored on the next publish.
+ */
+export function withdrawChunkMethod(stored: string): string {
+  return stored === 'naive' ? 'picture' : 'naive'
+}

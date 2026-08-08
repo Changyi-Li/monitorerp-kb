@@ -1,9 +1,11 @@
 import { serve } from '@hono/node-server'
-import { createConfiguredApp } from './app.js'
+import { createApp } from './app.js'
 import { loadConfig } from './config.js'
 import { createDb } from './db/client.js'
 import { runMigrations } from './db/migrate.js'
 import { seedSuperAdmin } from './db/seed.js'
+import { createRagflowClient } from './ragflow/client.js'
+import { startSweeper } from './sweeper.js'
 
 try {
   process.loadEnvFile()
@@ -22,10 +24,15 @@ const seeded = await seedSuperAdmin(db, {
 })
 if (seeded) console.log(`Seeded super admin ${config.adminEmail}`)
 
-const app = createConfiguredApp({ db, config })
+const ragflow = createRagflowClient(config)
+const app = createApp({ db, config, ragflow })
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`monitorerp-api listening on :${info.port}`)
 })
+
+// Single-replica in-process sweeper: keeps publishing documents in sync
+// with RagFlow's parse progress.
+startSweeper({ db, ragflow }, config.pollIntervalMs)
 
 const shutdown = (): void => {
   void close()
