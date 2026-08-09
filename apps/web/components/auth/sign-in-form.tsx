@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiJson, type ApiErrorBody, type User } from "@/lib/api"
+import { invalidateCurrentUserCache } from "@/lib/use-current-user"
 
 export function SignInForm() {
   const router = useRouter()
@@ -32,6 +33,9 @@ export function SignInForm() {
       body: JSON.stringify({ email, password }),
     })
     if (status === 200) {
+      // The new session must not inherit the previous one's cached user,
+      // or the UI would compute permissions with the wrong identity (issue #16).
+      invalidateCurrentUserCache()
       router.replace("/")
       router.refresh()
       return

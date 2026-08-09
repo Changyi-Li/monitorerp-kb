@@ -13,6 +13,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { apiJson, type User } from "@/lib/api"
+import { invalidateCurrentUserCache } from "@/lib/use-current-user"
 import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
@@ -53,6 +54,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const signOut = async (): Promise<void> => {
     await apiJson("/api/auth/sign-out", { method: "POST" })
+    // The next session must not inherit this one's cached user (issue #16).
+    invalidateCurrentUserCache()
     router.replace("/auth/sign-in")
     router.refresh()
   }
