@@ -13,12 +13,12 @@ import { recordDocumentTransition } from '../history.js'
 import { isUuid } from '../ids.js'
 import { RagflowError, type RagflowClient, type RagflowUploadInput, type RagflowUploadResult } from '../ragflow/client.js'
 import {
+  contentDisposition,
   deriveChunkMethod,
   fileExtension,
   isSupportedSuffix,
   MAX_NAME_BYTES,
   MAX_UPLOAD_BYTES,
-  sanitizeFilename,
   utf8ByteLength,
   withdrawChunkMethod,
 } from '../ragflow/files.js'
@@ -397,7 +397,7 @@ export function documentsRoutes(deps: Deps) {
     return new Response(upstream.body, {
       headers: {
         'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
-        'content-disposition': `attachment; filename="${sanitizeFilename(row.document.name)}"`,
+        'content-disposition': contentDisposition(row.document.name),
         ...(upstream.headers.get('content-length') !== null
           ? { 'content-length': upstream.headers.get('content-length') ?? '' }
           : {}),

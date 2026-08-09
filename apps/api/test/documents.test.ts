@@ -360,6 +360,20 @@ describe('GET /documents/:id/download', () => {
     expect(await res.text()).toBe(content)
   })
 
+  it('downloads a document with a non-ASCII filename via RFC 5987 filename*', async () => {
+    // Regression for issue #18: the raw name in the bare `filename` parameter
+    // makes Node's Response constructor throw (characters > U+00FF are not
+    // valid header bytes), surfacing as 500 and failing the download.
+    const cookie = await memberCookie()
+    const created = await jsonOf<{ document: WireDocument }>(await upload(cookie, '问题清单模板 v3.docx', 'x'))
+    const res = await app.request(`/documents/${created.document.id}/download`, { headers: cookieHeader(cookie) })
+    expect(res.status).toBe(200)
+    const disposition = res.headers.get('content-disposition')
+    expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent('问题清单模板 v3.docx')}`)
+    expect(disposition).toMatch(/^attachment; filename="[ -~]*"/) // ASCII fallback in the bare parameter
+    expect(await res.text()).toBe('x')
+  })
+
   it('works in any status', async () => {
     const cookie = await memberCookie()
     const created = await jsonOf<{ document: WireDocument }>(await upload(cookie, 'notes.md', 'x'))

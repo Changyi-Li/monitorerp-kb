@@ -41,6 +41,35 @@ export function sanitizeFilename(filename: string): string {
   return filename.replace(/[\r\n"]/g, '')
 }
 
+/** The only characters valid in a bare content-disposition filename parameter. */
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
+
+/** Characters encodeURIComponent leaves bare but RFC 5987 attr-char forbids. */
+const RFC5987_ATTR_EXTRA = /['()*]/g
+
+/** Percent-encodes a filename for the RFC 5987 filename* parameter. */
+function rfc5987Value(name: string): string {
+  return encodeURIComponent(name).replace(RFC5987_ATTR_EXTRA, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+/**
+ * Builds the Content-Disposition header for a download response. A bare
+ * `filename` parameter cannot carry characters above U+00FF (or control
+ * characters): Node's Response constructor rejects them as invalid header
+ * bytes (issue #18). The full name therefore goes in the RFC 5987
+ * `filename*` parameter and the bare parameter gets a mangled ASCII
+ * fallback — modern browsers use `filename*`, legacy clients get the
+ * fallback.
+ */
+export function contentDisposition(filename: string): string {
+  const sanitized = sanitizeFilename(filename)
+  if (PRINTABLE_ASCII.test(sanitized)) {
+    return `attachment; filename="${sanitized}"`
+  }
+  const fallback = sanitized.replace(/[^\x20-\x7e]/g, '_')
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${rfc5987Value(sanitized)}`
+}
+
 /**
  * A chunk method that is guaranteed to differ from the stored one, used by
  * withdraw's parser-flip reset (a same-value PUT would be a no-op). The
