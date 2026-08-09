@@ -9,6 +9,31 @@ export class RagflowError extends Error {
   }
 }
 
+/**
+ * Parses an upstream JSON response; an unparseable body (empty, HTML proxy
+ * page) is an upstream failure, not a crash: it surfaces as RagflowError so
+ * the routes map it to 502, never a 500.
+ */
+const parseUpstreamJson = async (upstream: Response): Promise<unknown> => {
+  try {
+    return await upstream.json()
+  } catch {
+    throw new RagflowError('RagFlow returned an unparseable payload')
+  }
+}
+
+/**
+ * RagFlow reports rejections as HTTP 200 with a non-zero `code` in the body
+ * (issue #14); a swallowed rejection makes the app pretend an upstream write
+ * succeeded. Throws RagflowError unless the payload reports code 0.
+ */
+const expectCodeZero = async (upstream: Response, rejected: string): Promise<void> => {
+  const payload = (await parseUpstreamJson(upstream)) as { code?: number }
+  if (payload.code !== 0) {
+    throw new RagflowError(rejected)
+  }
+}
+
 export interface RagflowUploadInput {
   stream: NodeJS.ReadableStream
   filename: string
@@ -108,7 +133,7 @@ export function createRagflowClient(config: Config): RagflowClient {
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow upload failed with status ${upstream.status}`, upstream.status)
       }
-      const payload = (await upstream.json()) as RagflowDocumentPayload
+      const payload = (await parseUpstreamJson(upstream)) as RagflowDocumentPayload
       if (payload.code !== 0 || payload.data?.[0]?.id === undefined) {
         throw new RagflowError('RagFlow returned an error payload')
       }
@@ -123,14 +148,7 @@ export function createRagflowClient(config: Config): RagflowClient {
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow list failed with status ${upstream.status}`, upstream.status)
       }
-      let payload: RagflowListItemPayload
-      try {
-        payload = (await upstream.json()) as RagflowListItemPayload
-      } catch {
-        // An unparseable body (empty, HTML proxy page) is an upstream failure,
-        // not a crash: it must surface as RagflowError → 502, never a 500.
-        throw new RagflowError('RagFlow returned an unparseable payload')
-      }
+      const payload = (await parseUpstreamJson(upstream)) as RagflowListItemPayload
       // An unusable payload is an upstream failure, not a crash: it must
       // surface as RagflowError so the routes map it to 502, never a 500.
       if (payload.code !== 0 || payload.data == null || !Array.isArray(payload.data.docs)) {
@@ -162,22 +180,38 @@ export function createRagflowClient(config: Config): RagflowClient {
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow chunk method update failed with status ${upstream.status}`, upstream.status)
       }
+      await expectCodeZero(upstream, 'RagFlow chunk method update was rejected')
     },
 
     async triggerParse(documentId) {
-      const url = chunksUrl()
-      url.searchParams.set('document_id', documentId)
-      const upstream = await guardedFetch(url, { method: 'POST' })
+      const upstream = await guardedFetch(chunksUrl(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        // Real RagFlow's parse endpoint takes `document_ids` (plural, array)
+        // in the JSON body, NOT a `document_id` query param (issue #14).
+        body: JSON.stringify({ document_ids: [documentId] }),
+      })
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow parse trigger failed with status ${upstream.status}`, upstream.status)
       }
+      // Without the code check a rejected trigger silently "succeeds" and the
+      // doc lands in publishing with no parse running (issue #14).
+      await expectCodeZero(upstream, 'RagFlow parse trigger was rejected')
     },
 
     async deleteDocument(documentId) {
-      const upstream = await guardedFetch(documentUrl(documentId), { method: 'DELETE' })
+      // Real RagFlow deletes via the collection endpoint with `ids` in the
+      // JSON body; DELETE on the single-document path answers 405 (verified
+      // live while fixing issue #14).
+      const upstream = await guardedFetch(documentsUrl(), {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: [documentId] }),
+      })
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow delete failed with status ${upstream.status}`, upstream.status)
       }
+      await expectCodeZero(upstream, 'RagFlow delete was rejected')
     },
   }
 }

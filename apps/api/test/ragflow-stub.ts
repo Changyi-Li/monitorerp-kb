@@ -122,8 +122,23 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
 
     if (chunksMatch !== null && req.method === 'POST') {
       if (stub.failParse) return fail(500, 'simulated parse failure')
-      const documentId = url.searchParams.get('document_id')
-      if (documentId === null || !uploads.some((u) => u.id === documentId)) return fail(404, 'document not found')
+      // Real RagFlow v0.26.4 takes `document_ids` (plural, array) in the
+      // JSON body and reports rejections as HTTP 200 + non-zero `code`
+      // (verified live while diagnosing issue #14). The stub mirrors both,
+      // so a client regressing to the old query-param format fails tests.
+      const body = JSON.parse((await readBody(req)) || '{}') as { document_ids?: unknown }
+      const ids = body.document_ids
+      if (!Array.isArray(ids) || ids.length === 0) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ code: 102, message: '`document_ids` is required' }))
+        return
+      }
+      const documentId = ids[0] as string
+      if (!uploads.some((u) => u.id === documentId)) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ code: 102, message: `Documents not found: ['${documentId}']` }))
+        return
+      }
       parseTriggers.push(documentId)
       const upload = uploads.find((u) => u.id === documentId)
       if (upload !== undefined) {
@@ -221,11 +236,22 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       return
     }
 
-    if (req.method === 'DELETE' && documentId !== undefined) {
+    // Real RagFlow deletes via the collection endpoint with `ids` in the
+    // JSON body; DELETE on the single-document path answers 405 (verified
+    // live while fixing issue #14) — that falls through to the 405 below.
+    if (docMatch !== null && req.method === 'DELETE' && docMatch[2] === undefined) {
       if (stub.failDeletes) return fail(500, 'simulated delete failure')
-      const index = uploads.findIndex((u) => u.id === documentId)
-      if (index === -1) return fail(404, 'document not found')
-      uploads.splice(index, 1)
+      const body = JSON.parse((await readBody(req)) || '{}') as { ids?: unknown }
+      const ids = body.ids
+      if (!Array.isArray(ids) || ids.length === 0) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ code: 102, message: '`ids` is required' }))
+        return
+      }
+      for (const id of ids) {
+        const index = uploads.findIndex((u) => u.id === id)
+        if (index !== -1) uploads.splice(index, 1)
+      }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ code: 0 }))
       return
