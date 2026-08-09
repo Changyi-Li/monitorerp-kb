@@ -23,12 +23,14 @@ export function SignUpForm() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [created, setCreated] = useState(false)
 
   const submit = async (): Promise<void> => {
     setSubmitting(true)
     setError(null)
+    setFieldErrors({})
     const { status, body } = await apiJson<ApiErrorBody>("/api/auth/sign-up", {
       method: "POST",
       body: JSON.stringify({ name, email, password }),
@@ -40,9 +42,12 @@ export function SignUpForm() {
     const apiError = (body as ApiErrorBody).error
     if (status === 409) setError("An account with this email already exists")
     else if (status === 400) {
-      const fields = apiError.fields ?? {}
-      const first = Object.values(fields).flat()[0]
-      setError(first ?? "Please check the form and try again")
+      // Render the API's per-field messages (issue #15 / spec #6 contract).
+      const fieldEntries = Object.entries(apiError.fields ?? {})
+        .map(([field, messages]) => [field, messages[0]] as const)
+        .filter(([, message]) => message !== undefined)
+      if (fieldEntries.length > 0) setFieldErrors(Object.fromEntries(fieldEntries))
+      else setError("Please check the form and try again")
     } else setError(apiError.message ?? "Something went wrong. Try again.")
     setSubmitting(false)
   }
@@ -75,7 +80,11 @@ export function SignUpForm() {
         <CardTitle>Sign up</CardTitle>
         <CardDescription>Create an account to join the knowledge base</CardDescription>
       </CardHeader>
+      {/* noValidate: the API owns validation, so its 400 `fields` envelope
+          reaches this form instead of being swallowed by native constraint
+          validation (issue #15). */}
       <form
+        noValidate
         onSubmit={(e) => {
           e.preventDefault()
           void submit()
@@ -90,9 +99,16 @@ export function SignUpForm() {
               autoComplete="name"
               required
               maxLength={100}
+              aria-invalid={fieldErrors.name !== undefined}
+              aria-describedby={fieldErrors.name !== undefined ? "name-error" : undefined}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+            {fieldErrors.name !== undefined && (
+              <p id="name-error" role="alert" className="text-sm text-destructive">
+                {fieldErrors.name}
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="email">Email</Label>
@@ -101,9 +117,16 @@ export function SignUpForm() {
               type="email"
               autoComplete="email"
               required
+              aria-invalid={fieldErrors.email !== undefined}
+              aria-describedby={fieldErrors.email !== undefined ? "email-error" : undefined}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+            {fieldErrors.email !== undefined && (
+              <p id="email-error" role="alert" className="text-sm text-destructive">
+                {fieldErrors.email}
+              </p>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="password">Password</Label>
@@ -113,10 +136,18 @@ export function SignUpForm() {
               autoComplete="new-password"
               required
               minLength={8}
+              aria-invalid={fieldErrors.password !== undefined}
+              aria-describedby={fieldErrors.password !== undefined ? "password-error" : undefined}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">At least 8 characters</p>
+            {fieldErrors.password !== undefined ? (
+              <p id="password-error" role="alert" className="text-sm text-destructive">
+                {fieldErrors.password}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">At least 8 characters</p>
+            )}
           </div>
           {error !== null && (
             <p role="alert" className="text-sm text-destructive">

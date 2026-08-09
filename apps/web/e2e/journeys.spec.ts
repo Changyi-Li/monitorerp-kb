@@ -53,6 +53,43 @@ test.describe('account journeys', () => {
     await signIn(page, email, 'password123')
     await expect(page.locator('form').getByRole('alert')).toContainText('deactivated')
   })
+
+  // issue #15: the API owns validation (noValidate), and its 400 `fields`
+  // envelope renders per-field instead of being dropped by native constraint
+  // validation (which used to swallow the submit before it reached the API).
+  test('sign-up surfaces the API field error under the invalid email', async ({ page }) => {
+    await page.goto('/auth/sign-up')
+    await page.getByLabel('Name').fill('No Error')
+    await page.getByLabel('Email').fill('not-an-email')
+    await page.getByLabel('Password').fill('password123')
+    await page.getByRole('button', { name: 'Create account' }).click()
+    const emailField = page.getByLabel('Email').locator('..')
+    await expect(emailField).toContainText('Invalid email address')
+  })
+
+  test('sign-up surfaces the API field error under a short password, replacing the helper text', async ({
+    page,
+  }) => {
+    await page.goto('/auth/sign-up')
+    await page.getByLabel('Name').fill('No Error')
+    await page.getByLabel('Email').fill(uniqueEmail('short'))
+    await page.getByLabel('Password').fill('short')
+    await page.getByRole('button', { name: 'Create account' }).click()
+    const passwordField = page.getByLabel('Password').locator('..')
+    await expect(passwordField).toContainText('Password must be at least 8 characters')
+    await expect(passwordField).not.toContainText('At least 8 characters')
+  })
+
+  test('duplicate email still renders the generic 409 alert', async ({ page, request }) => {
+    const email = uniqueEmail('dupe')
+    await apiSignUp(request, email)
+    await page.goto('/auth/sign-up')
+    await page.getByLabel('Name').fill('No Error')
+    await page.getByLabel('Email').fill(email)
+    await page.getByLabel('Password').fill('password123')
+    await page.getByRole('button', { name: 'Create account' }).click()
+    await expect(page.locator('form').getByRole('alert')).toContainText('already exists')
+  })
 })
 
 test.describe('document journeys', () => {
