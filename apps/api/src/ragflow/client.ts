@@ -40,7 +40,9 @@ export interface RagflowClient {
 
 interface RagflowDocumentPayload {
   code?: number
-  data?: { id?: string; name?: string; size?: number; chunk_count?: number; run?: string }
+  // Real RagFlow v0.26.4 returns `data` as an array of documents, even for a
+  // single-file upload (issue #13).
+  data?: Array<{ id?: string; name?: string; size?: number; chunk_count?: number; run?: string }>
 }
 
 interface RagflowListItemPayload {
@@ -102,12 +104,12 @@ export function createRagflowClient(config: Config): RagflowClient {
         throw new RagflowError(`RagFlow upload failed with status ${upstream.status}`, upstream.status)
       }
       const payload = (await upstream.json()) as RagflowDocumentPayload
-      if (payload.code !== 0 || payload.data?.id === undefined) {
+      if (payload.code !== 0 || payload.data?.[0]?.id === undefined) {
         throw new RagflowError('RagFlow returned an error payload')
       }
       return {
-        documentId: payload.data.id,
-        chunkCount: payload.data.chunk_count ?? 0,
+        documentId: payload.data[0].id,
+        chunkCount: payload.data[0].chunk_count ?? 0,
       }
     },
 

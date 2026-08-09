@@ -174,10 +174,13 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       }
       uploads.push(stored)
       res.writeHead(200, { 'content-type': 'application/json' })
+      // Real RagFlow v0.26.4 returns `data` as an ARRAY of documents, even for
+      // a single-file upload (verified live against the cloud instance while
+      // investigating issue #13) — the stub must not mask that shape.
       res.end(
         JSON.stringify({
           code: 0,
-          data: { id: stored.id, name: stored.name, size: stored.sizeBytes, chunk_count: 0, run: 'UNSTART' },
+          data: [{ id: stored.id, name: stored.name, size: stored.sizeBytes, chunk_count: 0, run: 'UNSTART' }],
         }),
       )
       return
