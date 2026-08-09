@@ -231,7 +231,7 @@ describe('GET /documents', () => {
     const body = await jsonOf<WireList>(res)
     expect(body).toMatchObject({ total: 2, page: 1, page_size: 20 })
     // Corpus-wide counts, unaffected by filters
-    expect(body.counts).toEqual({ draft: 1, ready: 0, publishing: 0, published: 1, failed: 0 })
+    expect(body.counts).toEqual({ draft: 1, publishing: 0, published: 1, failed: 0 })
     expect(body.items).toHaveLength(2)
     const byName = new Map(body.items.map((item) => [item.name, item]))
     expect(byName.get('one.md')).toMatchObject({ status: 'draft', owner: { name: 'Ada Lovelace' } })
@@ -256,10 +256,10 @@ describe('GET /documents', () => {
     await upload(cookie, 'second.md', 'b')
     await sleep(10)
     await upload(cookie, 'report.pdf', 'c')
-    await db.update(documents).set({ status: 'ready' }).where(eq(documents.name, 'report.pdf'))
+    await db.update(documents).set({ status: 'failed' }).where(eq(documents.name, 'report.pdf'))
 
     const byStatus = await jsonOf<WireList>(
-      await app.request('/documents?status=ready', { headers: cookieHeader(cookie) }),
+      await app.request('/documents?status=failed', { headers: cookieHeader(cookie) }),
     )
     expect(byStatus.total).toBe(1)
     expect(byStatus.items[0]?.name).toBe('report.pdf')

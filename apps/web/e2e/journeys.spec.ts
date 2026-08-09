@@ -93,11 +93,9 @@ test.describe('account journeys', () => {
 })
 
 test.describe('document journeys', () => {
-  test('upload → mark-ready → publish → published → withdraw → draft', async ({ page }) => {
+  test('upload → publish → published → withdraw → draft', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     const row = await uploadFile(page, 'notes.md', '# notes\n')
-    await rowAction(page, row, 'Mark ready')
-    await expect(row.getByText('Ready')).toBeVisible()
     await rowAction(page, row, 'Publish')
     await expect(row.getByText('Publishing')).toBeVisible()
 
@@ -108,10 +106,9 @@ test.describe('document journeys', () => {
     await expect(row.getByText('Draft')).toBeVisible()
   })
 
-  test('retry → exhausted → withdraw → re-promote → re-publish', async ({ page, request }) => {
+  test('retry → exhausted → withdraw → re-publish', async ({ page, request }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     const row = await uploadFile(page, 'broken.md', '# broken\n')
-    await rowAction(page, row, 'Mark ready')
     await rowAction(page, row, 'Publish')
     await expect(row.getByText('Publishing')).toBeVisible()
 
@@ -160,12 +157,10 @@ test.describe('document journeys', () => {
     expect(detail.document.status).toBe('failed')
     expect(detail.document.retries_left).toBe(0)
 
-    // Withdraw → re-promote → re-publish completes.
+    // Withdraw → re-publish completes.
     await panel.getByRole('button', { name: 'Withdraw' }).click()
     await expect(panel.getByText('Draft')).toBeVisible()
     await panel.getByRole('button', { name: 'Close details' }).click()
-    await rowAction(page, row, 'Mark ready')
-    await expect(row.getByText('Ready')).toBeVisible()
     await rowAction(page, row, 'Publish')
     // Same sync as the first publish: DONE must not land before triggerParse's
     // RUNNING, or the doc sticks in publishing (issue #17).
@@ -174,15 +169,13 @@ test.describe('document journeys', () => {
     await expect(row.getByText('Published')).toBeVisible()
   })
 
-  test('a super admin publishes another member\'s ready document', async ({ page, request }) => {
+  test('a super admin publishes another member\'s draft document', async ({ page, request }) => {
     const email = uniqueEmail('member')
     await apiSignUp(request, email)
     await activateUser(request, email)
 
     await signIn(page, email, 'password123')
-    const row = await uploadFile(page, 'shared.md', '# shared\n')
-    await rowAction(page, row, 'Mark ready')
-    await expect(row.getByText('Ready')).toBeVisible()
+    await uploadFile(page, 'shared.md', '# shared\n')
 
     await signOut(page)
     await signIn(page, ADMIN.email, ADMIN.password)

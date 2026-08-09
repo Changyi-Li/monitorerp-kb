@@ -23,7 +23,6 @@ export const roleEnum = pgEnum('role', ['member', 'super_admin'])
 export const accountStatusEnum = pgEnum('account_status', ['active', 'pending', 'deactivated'])
 export const documentStatusEnum = pgEnum('document_status', [
   'draft',
-  'ready',
   'publishing',
   'published',
   'failed',

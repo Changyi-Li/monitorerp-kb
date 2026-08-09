@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { activateUser, ADMIN, apiSignUp, rowAction, signIn, signOut, uploadFile, uniqueEmail } from './helpers'
+import { activateUser, ADMIN, apiSignUp, signIn, signOut, uploadFile, uniqueEmail } from './helpers'
 
 // issue #16: a non-owner member must see download-only actions on another
 // user's document (spec #6, story #31). The regression this guards: the
@@ -11,11 +11,9 @@ test('non-owner member sees download-only actions on another user\'s document', 
   // duplicate notes.md rows in the shared e2e database).
   const docName = `permissions-${Date.now()}.md`
 
-  // 1. As super admin: upload a document and mark it ready.
+  // 1. As super admin: upload a draft document the member owns nothing of.
   await signIn(page, ADMIN.email, ADMIN.password)
-  const row = await uploadFile(page, docName, '# notes\n')
-  await rowAction(page, row, 'Mark ready')
-  await expect(row.getByText('Ready')).toBeVisible()
+  await uploadFile(page, docName, '# notes\n')
 
   // 2. Create + activate a member who owns nothing.
   const email = uniqueEmail('member')
@@ -36,7 +34,7 @@ test('non-owner member sees download-only actions on another user\'s document', 
   // from the app's own fresh /api/auth/me fetch.
   await expect(page.getByText('Member', { exact: true })).toBeVisible()
 
-  // 4. The admin's ready document has no "⋯" menu for the member.
+  // 4. The admin's draft document has no "⋯" menu for the member.
   const adminRow = page.locator('tbody tr', { hasText: docName })
   await expect(adminRow).toBeVisible()
   await expect(adminRow.getByRole('button', { name: 'Document actions' })).toHaveCount(0)

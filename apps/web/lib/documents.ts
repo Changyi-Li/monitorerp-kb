@@ -1,16 +1,15 @@
 import { apiJson, type ApiErrorBody, type ApiResult } from "@/lib/api";
 
-export type DocumentStatus = "draft" | "ready" | "publishing" | "published" | "failed";
+export type DocumentStatus = "draft" | "publishing" | "published" | "failed";
 
 export const STATUS_LABELS: Record<DocumentStatus, string> = {
   draft: "Draft",
-  ready: "Ready",
   publishing: "Publishing",
   published: "Published",
   failed: "Failed",
 };
 
-export const STATUS_ORDER: DocumentStatus[] = ["draft", "ready", "publishing", "published", "failed"];
+export const STATUS_ORDER: DocumentStatus[] = ["draft", "publishing", "published", "failed"];
 
 export interface DocumentOwner {
   id: string;
@@ -88,7 +87,7 @@ export interface UploadResult {
   error?: ApiErrorBody["error"];
 }
 
-export type DocumentAction = "mark-ready" | "publish" | "retry" | "withdraw";
+export type DocumentAction = "publish" | "retry" | "withdraw";
 
 export interface DocumentActionResult {
   document?: DocumentItem;
@@ -116,8 +115,9 @@ export interface DocumentActionOption {
 
 /**
  * The actions a user may take on a document, mirroring the locked permission
- * matrix: non-owner members see download only; mark-ready is owner-only;
- * publish/retry/withdraw/delete are owner-or-super-admin.
+ * matrix: non-owner members see download only; publish/retry/withdraw/delete
+ * are owner-or-super-admin (an owner publishes their own draft, a super admin
+ * may publish any draft).
  */
 export function documentActionsFor(document: DocumentItem, userId: string, role: string): DocumentActionOption[] {
   if (document.status === "publishing") return [];
@@ -128,9 +128,6 @@ export function documentActionsFor(document: DocumentItem, userId: string, role:
   const actions: DocumentActionOption[] = [];
   switch (document.status) {
     case "draft":
-      if (isOwner) actions.push({ label: "Mark ready", action: "mark-ready" });
-      break;
-    case "ready":
       actions.push({ label: "Publish", action: "publish" });
       break;
     case "failed":

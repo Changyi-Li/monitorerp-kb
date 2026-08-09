@@ -152,60 +152,28 @@ async function setStatus(id: string, status: DocumentStatusValue): Promise<void>
   await db.update(documents).set({ status }).where(eq(documents.id, id))
 }
 
-describe('mark-ready (owner only)', () => {
-  it('moves a draft to ready and records history', async () => {
-    const cookie = await memberCookie()
-    const id = await upload(cookie)
-    const res = await act(cookie, 'mark-ready', id)
-    expect(res.status).toBe(200)
-    const { document } = await jsonOf<{ document: WireDocument }>(res)
-    expect(document.status).toBe('ready')
-    const body = await detail(id, cookie)
-    expect(body.history.at(-1)).toMatchObject({ from_status: 'draft', to_status: 'ready', note: 'Marked ready', actor: { name: 'member' } })
-  })
-
-  it('forbids non-owners, including super admins', async () => {
-    const owner = await memberCookie()
-    const id = await upload(owner)
-    const other = await memberCookie(OTHER.email)
-    expect((await act(other, 'mark-ready', id)).status).toBe(403)
-    const admin = await adminCookie()
-    expect((await act(admin, 'mark-ready', id)).status).toBe(403)
-  })
-
-  it('rejects non-draft documents with 409 wrong_status', async () => {
-    const cookie = await memberCookie()
-    const id = await upload(cookie)
-    await setStatus(id, 'ready')
-    const res = await act(cookie, 'mark-ready', id)
-    expect(res.status).toBe(409)
-    expect((await jsonOf<WireError>(res)).error.code).toBe('wrong_status')
-  })
-
-  it('returns 404 for unknown documents', async () => {
-    const cookie = await memberCookie()
-    expect((await act(cookie, 'mark-ready', '00000000-0000-0000-0000-000000000000')).status).toBe(404)
-  })
-})
-
 describe('publish (owner or super admin)', () => {
-  it('publishes a ready document: triggers the parse, moves to publishing', async () => {
+  it('publishes a draft document: triggers the parse, moves to publishing', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     const res = await act(cookie, 'publish', id)
     expect(res.status).toBe(200)
     const { document } = await jsonOf<{ document: WireDocument }>(res)
     expect(document.status).toBe('publishing')
     expect(stub.parseTriggers).toContain(stub.uploads[0]?.id)
     const body = await detail(id, cookie)
-    expect(body.history.at(-1)).toMatchObject({ from_status: 'ready', to_status: 'publishing', note: 'Published' })
+    expect(body.history.at(-1)).toMatchObject({ from_status: 'draft', to_status: 'publishing', note: 'Published' })
   })
 
-  it('lets a super admin publish anyone ready document', async () => {
+  it('no longer has a mark-ready endpoint (404)', async () => {
+    const cookie = await memberCookie()
+    const id = await upload(cookie)
+    expect((await act(cookie, 'mark-ready', id)).status).toBe(404)
+  })
+
+  it('lets a super admin publish anyone draft document', async () => {
     const owner = await memberCookie()
     const id = await upload(owner)
-    await act(owner, 'mark-ready', id)
     const admin = await adminCookie()
     const res = await act(admin, 'publish', id)
     expect(res.status).toBe(200)
@@ -215,15 +183,15 @@ describe('publish (owner or super admin)', () => {
   it('forbids a non-owner member', async () => {
     const owner = await memberCookie()
     const id = await upload(owner)
-    await act(owner, 'mark-ready', id)
     const other = await memberCookie(OTHER.email)
     const res = await act(other, 'publish', id)
     expect(res.status).toBe(403)
   })
 
-  it('rejects non-ready documents with 409 wrong_status', async () => {
+  it('rejects non-draft documents with 409 wrong_status', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
+    await setStatus(id, 'publishing')
     const res = await act(cookie, 'publish', id)
     expect(res.status).toBe(409)
     expect((await jsonOf<WireError>(res)).error.code).toBe('wrong_status')
@@ -232,7 +200,6 @@ describe('publish (owner or super admin)', () => {
   it('restores the stored chunk method before triggering the parse when RagFlow drifted', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     stub.setChunkMethodState(stub.uploads[0]?.id ?? '', 'picture') // drifted from stored 'naive'
     const res = await act(cookie, 'publish', id)
     expect(res.status).toBe(200)
@@ -243,24 +210,22 @@ describe('publish (owner or super admin)', () => {
   it('skips the chunk-method PUT when RagFlow already matches', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     const res = await act(cookie, 'publish', id)
     expect(res.status).toBe(200)
     expect(stub.chunkMethodCalls).toHaveLength(0)
     expect(stub.parseTriggers).toHaveLength(1)
   })
 
-  it('returns 502 and stays ready when RagFlow fails', async () => {
+  it('returns 502 and stays draft when RagFlow fails', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     stub.failParse = true
     const res = await act(cookie, 'publish', id)
     expect(res.status).toBe(502)
     expect((await jsonOf<WireError>(res)).error.code).toBe('upstream_error')
     const body = await detail(id, cookie)
-    expect(body.document.status).toBe('ready')
-    expect(body.history.at(-1)?.to_status).toBe('ready')
+    expect(body.document.status).toBe('draft')
+    expect(body.history.at(-1)?.to_status).toBe('draft')
   })
 })
 
@@ -268,7 +233,6 @@ describe('sweeper', () => {
   async function publishingDoc(): Promise<{ id: string; cookie: string }> {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     return { id, cookie }
   }
@@ -302,7 +266,6 @@ describe('sweeper', () => {
       ['CANCEL', 'Parse cancelled'],
     ] as const) {
       const id = await upload(cookie)
-      await act(cookie, 'mark-ready', id)
       await act(cookie, 'publish', id)
       const ragflowId = stub.parseTriggers.at(-1) ?? ''
       stub.setRun(ragflowId, run)
@@ -331,7 +294,6 @@ describe('sweeper', () => {
       ['UNSTART', 0.12, 12],
     ] as const) {
       const id = await upload(cookie)
-      await act(cookie, 'mark-ready', id)
       await act(cookie, 'publish', id)
       const ragflowId = stub.parseTriggers.at(-1) ?? ''
       stub.setRun(ragflowId, run)
@@ -340,14 +302,13 @@ describe('sweeper', () => {
       const body = await detail(id, cookie)
       expect(body.document.status).toBe('publishing')
       expect(body.document.progress).toBe(expected)
-      expect(body.history).toHaveLength(3) // upload + mark-ready + publish — no new row
+      expect(body.history).toHaveLength(2) // upload + publish — no new row
     }
   })
 
   it('a successful retry clears the last error', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     const ragflowId = stub.parseTriggers.at(-1) ?? ''
     stub.setRun(ragflowId, 'FAIL')
@@ -377,7 +338,6 @@ describe('retry (owner or super admin)', () => {
   async function failedDoc(): Promise<{ id: string; cookie: string }> {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     stub.setRun(stub.uploads[0]?.id ?? '', 'FAIL')
     await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
@@ -409,7 +369,7 @@ describe('retry (owner or super admin)', () => {
     expect((await jsonOf<WireError>(res)).error.code).toBe('retries_exhausted')
   })
 
-  it('an exhausted document recovers: withdraw → re-promote → re-publish completes', async () => {
+  it('an exhausted document recovers: withdraw → re-publish completes', async () => {
     const { id, cookie } = await failedDoc()
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       await act(cookie, 'retry', id)
@@ -420,7 +380,6 @@ describe('retry (owner or super admin)', () => {
     expect(exhausted.status).toBe(409)
 
     expect((await act(cookie, 'withdraw', id)).status).toBe(200)
-    expect((await act(cookie, 'mark-ready', id)).status).toBe(200)
     expect((await act(cookie, 'publish', id)).status).toBe(200)
     stub.setRun(stub.parseTriggers.at(-1) ?? '', 'DONE')
     await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
@@ -430,8 +389,7 @@ describe('retry (owner or super admin)', () => {
     expect(body.document.retries_left).toBe(3)
     expect(body.history.map((h) => `${h.from_status}→${h.to_status}`)).toEqual([
       'null→draft',
-      'draft→ready',
-      'ready→publishing',
+      'draft→publishing',
       'publishing→failed',
       'failed→publishing',
       'publishing→failed',
@@ -440,8 +398,7 @@ describe('retry (owner or super admin)', () => {
       'failed→publishing',
       'publishing→failed',
       'failed→draft',
-      'draft→ready',
-      'ready→publishing',
+      'draft→publishing',
       'publishing→published',
     ])
   })
@@ -466,7 +423,6 @@ describe('withdraw (owner or super admin)', () => {
   async function publishedDoc(): Promise<{ id: string; cookie: string }> {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     stub.setRun(stub.uploads[0]?.id ?? '', 'DONE')
     await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
@@ -496,7 +452,6 @@ describe('withdraw (owner or super admin)', () => {
   it('chooses a flip method that differs from RagFlow\'s current method, even under drift', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     stub.setRun(stub.parseTriggers.at(-1) ?? '', 'DONE')
     await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
@@ -512,7 +467,6 @@ describe('withdraw (owner or super admin)', () => {
   it('withdraws a failed document too', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    await act(cookie, 'mark-ready', id)
     await act(cookie, 'publish', id)
     stub.setRun(stub.uploads[0]?.id ?? '', 'FAIL')
     await sweeperTick(db, createRagflowClient({ ...TEST_CONFIG, ragflowUrl: stub.url }))
@@ -521,11 +475,9 @@ describe('withdraw (owner or super admin)', () => {
     expect((await jsonOf<{ document: WireDocument }>(res)).document.status).toBe('draft')
   })
 
-  it('rejects draft, ready, and publishing documents with 409 wrong_status', async () => {
+  it('rejects draft and publishing documents with 409 wrong_status', async () => {
     const cookie = await memberCookie()
     const id = await upload(cookie)
-    expect((await act(cookie, 'withdraw', id)).status).toBe(409)
-    await act(cookie, 'mark-ready', id)
     expect((await act(cookie, 'withdraw', id)).status).toBe(409)
     await act(cookie, 'publish', id) // now publishing, still RUNNING in the stub
     expect((await act(cookie, 'withdraw', id)).status).toBe(409)

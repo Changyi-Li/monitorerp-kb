@@ -28,7 +28,7 @@ const MAX_RETRIES = 3
 const DEFAULT_PAGE_SIZE = 20
 
 const listQuerySchema = z.object({
-  status: z.enum(['draft', 'ready', 'publishing', 'published', 'failed']).optional(),
+  status: z.enum(['draft', 'publishing', 'published', 'failed']).optional(),
   owner_id: z.uuid().optional(),
   q: z.string().trim().max(100).optional(),
   page: z.coerce.number().int().min(1).default(1),
@@ -124,7 +124,7 @@ export function documentsRoutes(deps: Deps) {
       .offset((query.page - 1) * query.page_size)
 
     // Corpus-wide per-status counts for the web KPI strip (independent of filters).
-    const counts: Record<DocumentRow['status'], number> = { draft: 0, ready: 0, publishing: 0, published: 0, failed: 0 }
+    const counts: Record<DocumentRow['status'], number> = { draft: 0, publishing: 0, published: 0, failed: 0 }
     const countRows = await deps.db
       .select({ status: documents.status, count: sql<number>`count(*)::int` })
       .from(documents)
@@ -188,36 +188,7 @@ export function documentsRoutes(deps: Deps) {
     })
   })
 
-  // POST /documents/:id/mark-ready — owner only; draft → ready.
-  app.post('/:id/mark-ready', async (c) => {
-    const user = c.get('user')
-    const id = c.req.param('id')
-    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Document not found')
-    const row = await findDocumentWithOwner(deps.db, id)
-    if (row === undefined) return sendError(c, 404, 'not_found', 'Document not found')
-    if (row.document.ownerId !== user.id) {
-      return sendError(c, 403, 'forbidden', 'Only the owner can mark a document ready')
-    }
-    if (row.document.status !== 'draft') {
-      return sendError(c, 409, 'wrong_status', 'Only draft documents can be marked ready')
-    }
-    await deps.db
-      .update(documents)
-      .set({ status: 'ready', updatedAt: new Date() })
-      .where(eq(documents.id, id))
-    await recordDocumentTransition(deps.db, {
-      documentId: id,
-      actorId: user.id,
-      fromStatus: 'draft',
-      toStatus: 'ready',
-      note: 'Marked ready',
-    })
-    const updated = await findDocumentWithOwner(deps.db, id)
-    if (updated === undefined) throw new Error('document vanished after transition')
-    return c.json({ document: documentShape(updated.document, updated.ownerName) })
-  })
-
-  // POST /documents/:id/publish — owner or super admin; ready → publishing.
+  // POST /documents/:id/publish — owner or super admin; draft → publishing.
   app.post('/:id/publish', async (c) => {
     const user = c.get('user')
     const id = c.req.param('id')
@@ -227,8 +198,8 @@ export function documentsRoutes(deps: Deps) {
     if (row.document.ownerId !== user.id && user.role !== 'super_admin') {
       return sendError(c, 403, 'forbidden', 'Only the owner or a super admin can publish')
     }
-    if (row.document.status !== 'ready') {
-      return sendError(c, 409, 'wrong_status', 'Only ready documents can be published')
+    if (row.document.status !== 'draft') {
+      return sendError(c, 409, 'wrong_status', 'Only draft documents can be published')
     }
     try {
       // If RagFlow's current chunk method drifted from the stored one
@@ -241,7 +212,7 @@ export function documentsRoutes(deps: Deps) {
       await ragflow.triggerParse(row.document.ragflowDocumentId)
     } catch (err) {
       if (err instanceof RagflowError) {
-        // Upstream failure — the document stays ready.
+        // Upstream failure — the document stays draft.
         return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
       }
       throw err
@@ -253,7 +224,7 @@ export function documentsRoutes(deps: Deps) {
     await recordDocumentTransition(deps.db, {
       documentId: id,
       actorId: user.id,
-      fromStatus: 'ready',
+      fromStatus: 'draft',
       toStatus: 'publishing',
       note: 'Published',
     })

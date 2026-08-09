@@ -4,7 +4,6 @@ import { cn } from "@/lib/utils";
 
 const STATUS_VARIANTS: Record<DocumentStatus, "default" | "secondary" | "outline" | "destructive"> = {
   draft: "secondary",
-  ready: "outline",
   publishing: "default",
   published: "default",
   failed: "destructive",

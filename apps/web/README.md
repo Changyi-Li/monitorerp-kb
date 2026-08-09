@@ -31,13 +31,12 @@ npx playwright install chromium   # once
 npm run test:e2e
 ```
 
-Journeys cover: sign-up → activate → sign-in; upload → mark-ready →
-publish → published → withdraw → draft; retry → exhausted → withdraw →
-re-promote → re-publish; super admin publishing another member's ready
-document; users administration with the last-admin guard; pending/
-deactivated sign-in refusal; theme persistence with the locked dark
-primary; empty states with a clear-filters action; and reduced-motion
-disabling animations.
+Journeys cover: sign-up → activate → sign-in; upload → publish →
+published → withdraw → draft; retry → exhausted → withdraw → re-publish;
+super admin publishing another member's draft document; users
+administration with the last-admin guard; pending/deactivated sign-in
+refusal; theme persistence with the locked dark primary; empty states
+with a clear-filters action; and reduced-motion disabling animations.
 
 ## Scripts
 
