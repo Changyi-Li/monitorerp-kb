@@ -33,15 +33,15 @@ The RagFlow collection a document is published to. A single dataset is configure
 _Avoid_: knowledge base, collection
 
 **Document status**:
-The stage of a Document's lifecycle: `draft` (default on upload), `ready` (owner marked it publishable), `publishing` (transient — sent to RagFlow, parsing), `published` (parse completed OK), `failed` (upload or parse error).
+The stage of a Document's lifecycle: `draft` (default on upload), `publishing` (transient — sent to RagFlow, parsing), `published` (parse completed OK), `failed` (upload or parse error).
 _Avoid_: state, stage
 
 **Publish**:
-The act of sending a ready Document to RagFlow for parsing. A Document is parsed by RagFlow only when it is published; a failed publish can be retried up to three times, then requires withdrawing to draft and re-promoting.
+The act of sending a Document to RagFlow for parsing — the owner of a draft, or any super admin, may publish. A Document is parsed by RagFlow only when it is published; a failed publish can be retried up to three times, then requires withdrawing to draft before it can be published again.
 _Avoid_: push, deploy, sync
 
 **Withdraw**:
-The act of moving a Document back to draft: the file stays in RagFlow, its parse data (chunks) is removed, and it is parsed again when re-published. Available to the owner for their own Documents and to any super admin; the way to return a failed Document to `ready` after retries are exhausted, and the way to take a published Document out of retrieval.
+The act of moving a Document back to draft: the file stays in RagFlow, its parse data (chunks) is removed, and it is parsed again when re-published. Available to the owner for their own Documents and to any super admin; the way to return a failed Document to a publishable state after retries are exhausted, and the way to take a published Document out of retrieval.
 _Avoid_: unpublish, retract
 
 **Document history**:
