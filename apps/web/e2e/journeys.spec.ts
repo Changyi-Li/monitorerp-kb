@@ -121,27 +121,38 @@ test.describe('document journeys', () => {
     // Detail panel: failed alert with retries-left and the error text.
     await row.click()
     const panel = page.locator('aside').last()
-    await expect(panel.getByRole('alert')).toContainText('3 retries left')
-    await expect(panel.getByRole('alert')).toContainText('parser crashed')
+    // Scoped to the failed banner: a refused retry renders a separate error
+    // alert, and an unqualified role=alert query then resolves to both.
+    const failedBanner = panel.getByRole('alert').filter({ hasText: /parsing failed/i })
+    await expect(failedBanner).toContainText('3 retries left')
+    await expect(failedBanner).toContainText('parser crashed')
 
     // Two retries: each moves to publishing, then fails again with one fewer
     // retry left (the alert reappears after the sweeper settles it).
     for (const retriesLeft of [2, 1]) {
       await panel.getByRole('button', { name: 'Retry' }).click()
+      // Sync before driving the stub (issue #17): the click returns before the
+      // retry POST lands, so without this the FAIL write can be overwritten by
+      // triggerParse's RUNNING and the doc sticks in publishing. Publishing is
+      // only visible after the POST completes (triggerParse precedes the DB
+      // transition), mirroring the publish sync above. Exact text: the history
+      // list also contains "publishing" as a substring.
+      await expect(panel.getByText('Publishing', { exact: true })).toBeVisible()
       await setStubRun('broken.md', 'FAIL')
       const label = retriesLeft === 1 ? '1 retry left' : `${retriesLeft} retries left`
-      await expect(panel.getByRole('alert')).toContainText(label)
+      await expect(failedBanner).toContainText(label)
     }
 
     // A third retry consumes the last one.
     await panel.getByRole('button', { name: 'Retry' }).click()
+    await expect(panel.getByText('Publishing', { exact: true })).toBeVisible()
     await setStubRun('broken.md', 'FAIL')
-    await expect(panel.getByRole('alert')).toContainText(/no retries left/i)
+    await expect(failedBanner).toContainText(/no retries left/i)
 
     // The next retry is refused outright: the document stays failed with zero
     // retries left (a successful retry would hide the alert entirely).
     await panel.getByRole('button', { name: 'Retry' }).click()
-    await expect(panel.getByRole('alert')).toContainText(/no retries left/i)
+    await expect(failedBanner).toContainText(/no retries left/i)
     const adminSignIn = await request.post('/api/auth/sign-in', { data: ADMIN })
     expect(adminSignIn.status()).toBe(200)
     const list = await (await request.get('/api/documents?q=broken.md')).json()
@@ -156,6 +167,9 @@ test.describe('document journeys', () => {
     await rowAction(page, row, 'Mark ready')
     await expect(row.getByText('Ready')).toBeVisible()
     await rowAction(page, row, 'Publish')
+    // Same sync as the first publish: DONE must not land before triggerParse's
+    // RUNNING, or the doc sticks in publishing (issue #17).
+    await expect(row.getByText('Publishing')).toBeVisible()
     await setStubRun('broken.md', 'DONE', { chunk_count: 7 })
     await expect(row.getByText('Published')).toBeVisible()
   })
