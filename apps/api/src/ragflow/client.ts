@@ -47,14 +47,19 @@ interface RagflowDocumentPayload {
 
 interface RagflowListItemPayload {
   code?: number
-  data?: Array<{
-    id?: string
-    run?: string
-    progress?: number
-    chunk_count?: number
-    progress_msg?: string
-    chunk_method?: string
-  }>
+  // Real RagFlow v0.26.4 returns `data` as `{ docs: [...], total: n }` from
+  // the list endpoint (issue #14), NOT a bare array.
+  data?: {
+    docs?: Array<{
+      id?: string
+      run?: string
+      progress?: number
+      chunk_count?: number
+      progress_msg?: string
+      chunk_method?: string
+    }>
+    total?: number
+  }
 }
 
 /**
@@ -118,11 +123,20 @@ export function createRagflowClient(config: Config): RagflowClient {
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow list failed with status ${upstream.status}`, upstream.status)
       }
-      const payload = (await upstream.json()) as RagflowListItemPayload
-      if (payload.code !== 0 || payload.data === undefined) {
+      let payload: RagflowListItemPayload
+      try {
+        payload = (await upstream.json()) as RagflowListItemPayload
+      } catch {
+        // An unparseable body (empty, HTML proxy page) is an upstream failure,
+        // not a crash: it must surface as RagflowError → 502, never a 500.
+        throw new RagflowError('RagFlow returned an unparseable payload')
+      }
+      // An unusable payload is an upstream failure, not a crash: it must
+      // surface as RagflowError so the routes map it to 502, never a 500.
+      if (payload.code !== 0 || payload.data == null || !Array.isArray(payload.data.docs)) {
         throw new RagflowError('RagFlow returned an error payload')
       }
-      return payload.data
+      return payload.data.docs
         .filter((item) => item.id !== undefined)
         .map((item) => ({
           id: item.id as string,

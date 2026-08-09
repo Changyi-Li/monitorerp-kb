@@ -138,18 +138,24 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     if (docMatch !== null && req.method === 'GET' && docMatch[2] === undefined) {
       if (stub.failList) return fail(500, 'simulated list failure')
       res.writeHead(200, { 'content-type': 'application/json' })
+      // Real RagFlow v0.26.4 returns `data` as an OBJECT with `docs`/`total`
+      // from the list endpoint (verified live while diagnosing issue #14) —
+      // the stub must not mask that shape with a bare array.
       res.end(
         JSON.stringify({
           code: 0,
-          data: uploads.map((u) => ({
-            id: u.id,
-            name: u.name,
-            run: u.run,
-            progress: u.progress,
-            chunk_count: u.chunkCount,
-            progress_msg: u.progressMsg,
-            chunk_method: u.chunkMethod,
-          })),
+          data: {
+            docs: uploads.map((u) => ({
+              id: u.id,
+              name: u.name,
+              run: u.run,
+              progress: u.progress,
+              chunk_count: u.chunkCount,
+              progress_msg: u.progressMsg,
+              chunk_method: u.chunkMethod,
+            })),
+            total: uploads.length,
+          },
         }),
       )
       return
