@@ -1,28 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import { createCompletionTransform, splitThinking, type ChatTransformEvent } from '../src/chat/transform.js'
+import { realCompletionFrame } from './ragflow-wire.js'
 
-// RagFlow agent SSE frames (research #20 wire shape): `event:` + `data:`
-// lines; the stream ends with `data: [DONE]`. These builders script the
-// frame sequences the transform consumes.
+// Real RagFlow agent SSE frames (captured live from the deployed agent on
+// 2026-08-10, bug #29): a single `data:` line whose JSON is
+// {event, message_id, task_id, data, session_id}. Success frames carry NO
+// `code` field — that envelope belongs to the dataset API, not the agent
+// stream; the transform must not treat its absence as an error. The stream
+// ends with `data: [DONE]`. Frames are built by the shared wire helper so
+// they can never drift from the stub's.
+const message = (content: string, sessionId = 'session-1'): string =>
+  realCompletionFrame('message', { content }, sessionId)
 
-const message = (content: string, sessionId?: string): string => {
-  const frameData: Record<string, unknown> = { content }
-  if (sessionId !== undefined) frameData['session_id'] = sessionId
-  return `event: message\ndata: ${JSON.stringify({ code: 0, data: frameData })}`
-}
+const messageEnd = (sessionId = 'session-1', reference?: unknown): string =>
+  realCompletionFrame('message_end', { reference: reference ?? { chunks: {} } }, sessionId)
 
-const messageEnd = (sessionId?: string, reference?: unknown): string => {
-  const frameData: Record<string, unknown> = { reference: reference ?? { chunks: {} } }
-  if (sessionId !== undefined) frameData['session_id'] = sessionId
-  return `event: message_end\ndata: ${JSON.stringify({ code: 0, data: frameData })}`
-}
-
-const nodeFinished = (): string => `event: node_finished\ndata: ${JSON.stringify({ code: 0, data: {} })}`
+const nodeFinished = (sessionId = 'session-1'): string => realCompletionFrame('node_finished', {}, sessionId)
 
 const doneFrame = (): string => 'data: [DONE]'
 
+// Rejections carry a numeric non-zero `code` with a string `message` (real
+// RagFlow error bodies, e.g. {"code":103,"message":"..."}).
 const rejected = (messageText: string): string =>
-  `event: message\ndata: ${JSON.stringify({ code: 102, message: messageText })}`
+  `data:${JSON.stringify({ code: 103, message: messageText })}`
 
 // Feeds every frame and collects the events.
 const allEvents = (transform: { feed: (f: string) => ChatTransformEvent[] }, frames: string[]): ChatTransformEvent[] =>
@@ -370,5 +370,30 @@ describe('completion transform — full stream shape', () => {
       { type: 'done' },
     ])
     expect(thinkingText(events)).toBe('The user asks about leave policy.')
+  })
+})
+
+describe('completion transform — real RagFlow frame shape (bug #29)', () => {
+  it('streams a real-shaped lazy stream end to end: session → answer → done', () => {
+    const t = createCompletionTransform({ lazy: true })
+    const events = allEvents(t, [
+      realCompletionFrame('workflow_started', {}, 'real-session-1'),
+      message('Hello! I am your assistant.', 'real-session-1'),
+      messageEnd('real-session-1'),
+      nodeFinished('real-session-1'),
+      doneFrame(),
+    ])
+    expect(events.filter((e) => e.type !== 'thinking')).toEqual([
+      { type: 'session', id: 'real-session-1' },
+      { type: 'answer', delta: 'Hello! I am your assistant.' },
+      { type: 'done' },
+    ])
+  })
+
+  it('does not treat a code-less frame as an error — real success frames have no code field', () => {
+    const t = createCompletionTransform({ lazy: false })
+    expect(t.feed(message('plain text'))).toEqual([{ type: 'answer', delta: 'plain text' }])
+    expect(t.feed(messageEnd())).toEqual([])
+    expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
   })
 })

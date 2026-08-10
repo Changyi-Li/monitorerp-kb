@@ -81,11 +81,15 @@ export function createAgentClient(config: Config): AgentClient {
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow session fetch failed with status ${upstream.status}`, upstream.status)
       }
-      const payload = (await parseUpstreamJson(upstream)) as { code?: number; data?: RagflowSessionPayload }
+      const payload = (await parseUpstreamJson(upstream)) as { code?: number; data?: RagflowSessionPayload[] }
       if (payload.code !== 0) {
         throw new RagflowError('RagFlow session fetch was rejected')
       }
-      return payload.data ?? {}
+      // Real RagFlow wraps the session in a one-element ARRAY
+      // `data: [{...session}]` (bug #29 family — the stub's old object shape
+      // masked it, so resumed history came back empty); unwrap so the caller
+      // sees the session object.
+      return payload.data?.[0] ?? {}
     },
 
     async deleteSession(sessionId) {

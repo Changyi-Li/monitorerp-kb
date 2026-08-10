@@ -65,7 +65,10 @@ function parseFrame(frame: string): ParsedFrame {
 interface FramePayload {
   code?: unknown
   message?: unknown
-  data?: { content?: unknown; session_id?: unknown; reference?: unknown }
+  // session_id is a TOP-LEVEL field of every real agent frame (bug #29), not
+  // nested under data as the old scripted shape had it.
+  session_id?: unknown
+  data?: { content?: unknown; reference?: unknown }
 }
 
 /** First page from the positions arrays, if any ([page, x, y, w, h] each). */
@@ -241,13 +244,16 @@ export function createCompletionTransform(options: {
     } catch {
       return terminalError('RagFlow returned an unparseable stream frame')
     }
-    if (payload.code !== 0) {
+    // Real agent frames carry no `code` field at all (bug #29: `undefined !==
+    // 0` treated every success frame as an error and killed the stream on the
+    // first one) — only a present, non-zero code is a rejection.
+    if (typeof payload.code === 'number' && payload.code !== 0) {
       const message = typeof payload.message === 'string' ? payload.message : 'RagFlow reported an error'
       return terminalError(message)
     }
 
     const out: ChatTransformEvent[] = []
-    const sessionId = payload.data?.session_id
+    const sessionId = payload.session_id
     // Lazy create: the first frame carrying the auto-created session id emits
     // the leading session event; the route maps it to our row's id.
     if (options.lazy && !sessionEmitted && typeof sessionId === 'string' && sessionId !== '') {

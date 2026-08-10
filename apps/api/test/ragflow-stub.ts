@@ -2,6 +2,7 @@ import { Busboy } from '@fastify/busboy'
 import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { realCompletionFrame } from './ragflow-wire.js'
 
 export interface StoredUpload {
   id: string
@@ -226,10 +227,12 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
         return
       }
       res.writeHead(200, { 'content-type': 'application/json' })
+      // REAL shape (bug #29 family): data wraps the session in a one-element
+      // array — the old object shape made the client's unwrap dead code.
       res.end(
         JSON.stringify({
           code: 0,
-          data: { id: session.id, name: session.messages[0]?.content ?? session.id, message: session.messages },
+          data: [{ id: session.id, name: session.messages[0]?.content ?? session.id, message: session.messages }],
         }),
       )
       return
@@ -253,11 +256,15 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       return
     }
 
-    // Agent completion SSE (research #20 wire shape): POST
-    // /api/v1/agents/chat/completions with `{agent_id, query, stream: true,
-    // session_id?}`; when no session_id is sent, a session is auto-created
-    // and its id is carried in every frame. The stream is scripted to include
-    // <think> tags split across deltas and a message_end reference.
+    // Agent completion SSE (REAL wire shape, verified live 2026-08-10, bug
+    // #29): POST /api/v1/agents/chat/completions with `{agent_id, query,
+    // stream: true, session_id?}`; when no session_id is sent, a session is
+    // auto-created and its id is carried at the TOP LEVEL of every frame.
+    // Frames are a single `data:` line with {event, message_id, task_id,
+    // data, session_id} — success frames have NO `code` field (the old
+    // scripted `{code: 0, data: ...}` envelope was the dataset API's, and it
+    // masked bug #29). The stream is scripted to include <think> tags split
+    // across deltas and a message_end reference.
     if (url.pathname === '/api/v1/agents/chat/completions' && req.method === 'POST') {
       if (stub.failCompletions) return fail(500, 'simulated completion failure')
       const body = JSON.parse((await readBody(req)) || '{}') as {
@@ -282,16 +289,11 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
 
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       for (const delta of COMPLETION_DELTAS) {
-        res.write(`event: message\ndata: ${JSON.stringify({ code: 0, data: { session_id: streamedSessionId, content: delta } })}\n\n`)
+        res.write(`${realCompletionFrame('message', { content: delta }, streamedSessionId)}\n\n`)
         await sleep(COMPLETION_FRAME_DELAY_MS)
       }
-      res.write(
-        `event: message_end\ndata: ${JSON.stringify({
-          code: 0,
-          data: { session_id: streamedSessionId, reference: COMPLETION_REFERENCE },
-        })}\n\n`,
-      )
-      res.write(`event: node_finished\ndata: ${JSON.stringify({ code: 0, data: {} })}\n\n`)
+      res.write(`${realCompletionFrame('message_end', { reference: COMPLETION_REFERENCE }, streamedSessionId)}\n\n`)
+      res.write(`${realCompletionFrame('node_finished', {}, streamedSessionId)}\n\n`)
       res.write(`data: [DONE]\n\n`)
       res.end()
       return

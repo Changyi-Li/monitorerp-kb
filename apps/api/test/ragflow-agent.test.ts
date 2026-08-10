@@ -122,8 +122,10 @@ describe('RagFlow agent client — session wire contracts', () => {
     await server.close()
   })
 
-  it('fetchSession requests the session by id with dsl=false and returns the payload data', async () => {
-    server.payload.current = { code: 0, data: { id: 's-1', message: [{ role: 'user', content: 'hi' }] } }
+  it('fetchSession requests the session by id with dsl=false and unwraps the real one-element array', async () => {
+    // Real RagFlow wraps the session in `data: [{...session}]` (bug #29
+    // family) — the client unwraps so callers see the session object.
+    server.payload.current = { code: 0, data: [{ id: 's-1', message: [{ role: 'user', content: 'hi' }] }] }
     const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
     const session = await client.fetchSession('s-1')
     const req = server.requests.at(-1)
