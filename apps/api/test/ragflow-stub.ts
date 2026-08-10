@@ -78,9 +78,11 @@ export interface RagflowStub {
 // The scripted agent completion stream: `<think>` tags SPLIT across deltas
 // (the open tag is cut by the first frame boundary, the close tag by the
 // last) so the API e2e proves the transform's tag handling end-to-end, a
-// message_end with a live-shape reference carrying inline [n] markers, and
-// the answer in word-level deltas so the web e2e can observe the answer
-// streaming in incrementally.
+// message_end with a live-shape reference carrying inline [ID:n] citation
+// markers (issue #30 — the real agent cites [ID:<chunk key>], not [n]
+// ordinals), one marker split across deltas so the streaming rewrite is
+// exercised, and the answer in word-level deltas so the web e2e can observe
+// the answer streaming in incrementally.
 const COMPLETION_DELTAS = [
   '<thi',
   'nk>The user asks about the leave policy. The policy states 21 days per year.\n</th',
@@ -88,11 +90,12 @@ const COMPLETION_DELTAS = [
   ' is capped',
   ' at 21 days',
   ' per year',
-  ' [1].',
+  ' [ID:',
+  '19].',
   ' It resets',
   ' every',
   ' calendar year',
-  ' [2].',
+  ' [ID:41].',
 ]
 
 // The document name/id pair from the scripted reference. Uploads with this
@@ -101,16 +104,20 @@ const COMPLETION_DELTAS = [
 export const REFERENCE_DOCUMENT_NAME = 'Leave Policy.md'
 export const REFERENCE_DOCUMENT_ID = 'stub-doc-1'
 
+// REAL citation shape (issue #30, captured live 2026-08-10): the chunks map
+// keys are ARBITRARY integers the agent cites as [ID:<key>] — not ordinals.
+// Scattered keys like the real wire's (19, 41, …) keep a regression to
+// ordinal-based matching red.
 const COMPLETION_REFERENCE = {
   chunks: {
-    '1': {
+    '19': {
       content: 'Leave is capped at 21 days per year.',
       document_id: REFERENCE_DOCUMENT_ID,
       document_name: REFERENCE_DOCUMENT_NAME,
       dataset_id: 'stub-dataset',
       positions: [[3, 0.1, 0.2, 0.8, 0.05]],
     },
-    '2': {
+    '41': {
       content: 'It resets every calendar year.',
       document_id: 'stub-external-doc',
       document_name: 'External Handbook.pdf',
@@ -125,11 +132,14 @@ const COMPLETION_REFERENCE = {
 // the stored-history citation LIST shape (research #20).
 const STUB_ASSISTANT_CONTENT =
   '<think>The user asks about the leave policy. The policy states 21 days per year.\n</think>' +
-  'Leave is capped at 21 days per year [1]. It resets every calendar year [2].'
+  'Leave is capped at 21 days per year [ID:19]. It resets every calendar year [ID:41].'
 
+// Stored-history citation LIST shape (research #20) on the REAL wire: each
+// item's `citation_id` is the same arbitrary integer the [ID:n] markers use —
+// never list order (issue #30).
 const STORED_REFERENCE = [
   {
-    citation_id: 'c1',
+    citation_id: '19',
     content: 'Leave is capped at 21 days per year.',
     document_id: REFERENCE_DOCUMENT_ID,
     document_name: REFERENCE_DOCUMENT_NAME,
@@ -137,7 +147,7 @@ const STORED_REFERENCE = [
     positions: [[3, 0.1, 0.2, 0.8, 0.05]],
   },
   {
-    citation_id: 'c2',
+    citation_id: '41',
     content: 'It resets every calendar year.',
     document_id: 'stub-external-doc',
     document_name: 'External Handbook.pdf',

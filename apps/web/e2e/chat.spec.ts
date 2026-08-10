@@ -4,11 +4,12 @@ import { activateUser, ADMIN, apiSignUp, signIn, uniqueEmail, uploadFile } from 
 const STUB_URL = 'http://127.0.0.1:9399'
 
 /**
- * The stub's scripted answer, streamed in word-level deltas. The [n] markers
- * render as chips whose text is just the number, so the rendered text has no
+ * The stub's scripted answer, streamed in word-level deltas. Its [ID:n]
+ * markers are rewritten to [n] by the API transform (issue #30) and render
+ * as chips whose text is just the number, so the rendered text has no
  * brackets.
  */
-const ANSWER = 'Leave is capped at 21 days per year 1. It resets every calendar year 2.'
+const ANSWER = 'Leave is capped at 21 days per year 19. It resets every calendar year 41.'
 
 // Unique per run: the e2e database and the stub's request log persist across
 // runs when a dev reuses running servers (playwright's reuseExistingServer),
@@ -113,7 +114,7 @@ test.describe('chat', () => {
   test('citation chips reveal source cards; Open full document only for managed Documents', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     // The managed Document: the stub assigns 'Leave Policy.md' the fixed id
-    // its scripted citation 1 references, so this upload maps to the card.
+    // its scripted citation [ID:19] references, so this upload maps to the card.
     await uploadFile(page, 'Leave Policy.md', '# Leave policy\n')
 
     await page.getByRole('link', { name: 'Chat' }).click()
@@ -124,13 +125,13 @@ test.describe('chat', () => {
     await page.getByRole('button', { name: 'Send message' }).click()
     await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
 
-    // Both [n] markers render as clickable chips.
-    const chip1 = page.getByRole('button', { name: 'Source 1: Leave Policy.md' })
-    const chip2 = page.getByRole('button', { name: 'Source 2: External Handbook.pdf' })
+    // Both [n] markers render as clickable chips (rewritten from [ID:n]).
+    const chip1 = page.getByRole('button', { name: 'Source 19: Leave Policy.md' })
+    const chip2 = page.getByRole('button', { name: 'Source 41: External Handbook.pdf' })
     await expect(chip1).toBeVisible()
     await expect(chip2).toBeVisible()
 
-    // Clicking [1] reveals the managed source's card: passage, page, name.
+    // Clicking [19] reveals the managed source's card: passage, page, name.
     await chip1.click()
     await expect(page.getByText('Leave is capped at 21 days per year.', { exact: false })).toBeVisible()
     await expect(page.getByText('Leave Policy.md')).toBeVisible()
@@ -144,14 +145,14 @@ test.describe('chat', () => {
     await expect(page.getByText('page 3')).not.toBeVisible()
     await expect(openLink).not.toBeVisible()
 
-    // Clicking [2] swaps to the external source: no page, no link.
+    // Clicking [41] swaps to the external source: no page, no link.
     await chip2.click()
     await expect(page.getByText('It resets every calendar year.', { exact: false })).toBeVisible()
     await expect(page.getByText('External Handbook.pdf')).toBeVisible()
     await expect(page.getByText('page 3')).not.toBeVisible()
     await expect(page.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
 
-    // Clicking [1] again swaps back to the managed source.
+    // Clicking [19] again swaps back to the managed source.
     await chip1.click()
     await expect(openLink).toBeVisible()
 
@@ -215,13 +216,13 @@ test.describe('chat', () => {
     await expect(page.locator('div.bg-primary', { hasText: query })).toBeVisible()
     await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Show thinking' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Source 1: Leave Policy.md' })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Source 2: External Handbook.pdf' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 41: External Handbook.pdf' })).toBeVisible()
 
     // History citations link to managed Documents exactly as live ones do.
-    await page.getByRole('button', { name: 'Source 1: Leave Policy.md' }).click()
+    await page.getByRole('button', { name: 'Source 19: Leave Policy.md' }).click()
     await expect(page.getByRole('link', { name: 'Open full document' })).toBeVisible()
-    await page.getByRole('button', { name: 'Source 2: External Handbook.pdf' }).click()
+    await page.getByRole('button', { name: 'Source 41: External Handbook.pdf' }).click()
     await expect(page.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
   })
 

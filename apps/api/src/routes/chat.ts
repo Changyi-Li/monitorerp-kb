@@ -5,6 +5,7 @@ import { authMiddleware } from '../auth/middleware.js'
 import type { User } from '../auth/user.js'
 import {
   createCompletionTransform,
+  normalizeAnswerMarkers,
   normalizeReference,
   splitThinking,
   type ChatCitation,
@@ -86,7 +87,10 @@ export function historyMessageShape(raw: unknown, documentIdLookup: DocumentIdLo
   const shape: HistoryMessageShape = { role: message.role, content }
   if (message.role === 'assistant') {
     const { thinking, answer } = splitThinking(content)
-    shape.content = answer
+    // Stored content carries the agent's raw [ID:n] markers — rewrite them to
+    // the contract's [n] form exactly as the streaming transform does
+    // (issue #30).
+    shape.content = normalizeAnswerMarkers(answer)
     if (thinking !== '') shape.thinking = thinking
     const references = normalizeReference(message.reference, documentIdLookup)
     if (references.length > 0) shape.references = references

@@ -144,9 +144,10 @@ describe('POST /chat/completions', () => {
     expect(sessionId).toBeTypeOf('string')
     // The stub's scripted stream splits the <think> tags across deltas; the
     // proxy emits the reasoning as thinking deltas and only the answer as
-    // answer deltas.
+    // answer deltas, with the agent's [ID:n] markers rewritten to [n]
+    // (issue #30).
     expect(thinkingText(events)).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
-    expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
+    expect(answerText(events)).toBe('Leave is capped at 21 days per year [19]. It resets every calendar year [41].')
 
     // The stub saw a lazy request (no session_id) and auto-created one.
     expect(stub.completionRequests).toHaveLength(1)
@@ -173,7 +174,7 @@ describe('POST /chat/completions', () => {
     expect(events.at(-1)?.event).toBe('done')
     expect(events.slice(0, -1).every((e) => ['answer', 'references', 'thinking'].includes(e.event))).toBe(true)
     expect(thinkingText(events)).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
-    expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
+    expect(answerText(events)).toBe('Leave is capped at 21 days per year [19]. It resets every calendar year [41].')
 
     // The proxy sent the RagFlow session id this time, not a lazy request.
     expect(stub.completionRequests).toHaveLength(2)
@@ -223,8 +224,8 @@ describe('POST /chat/completions', () => {
     const cookie = await activeMemberCookie()
     const [member] = await db.select({ id: users.id }).from(users).where(eq(users.email, MEMBER.email)).limit(1)
     expect(member).toBeDefined()
-    // The stub's scripted citation 1 references 'stub-doc-1' — seed the
-    // Document it maps to; citation 2 stays external.
+    // The stub's scripted citation [ID:19] references 'stub-doc-1' — seed
+    // the Document it maps to; citation [ID:41] stays external.
     const [seeded] = await db
       .insert(documents)
       .values({
@@ -243,7 +244,7 @@ describe('POST /chat/completions', () => {
     const refs = events.find((e) => e.event === 'references')
     expect(refs?.data.items).toEqual([
       {
-        n: 1,
+        n: 19,
         content: 'Leave is capped at 21 days per year.',
         document_name: 'Leave Policy.md',
         page: 3,
@@ -251,7 +252,7 @@ describe('POST /chat/completions', () => {
         document_id: seeded!.id,
       },
       {
-        n: 2,
+        n: 41,
         content: 'It resets every calendar year.',
         document_name: 'External Handbook.pdf',
         page: null,
@@ -333,8 +334,8 @@ describe('GET /chat/sessions', () => {
 describe('GET /chat/sessions/:id/messages', () => {
   it('normalizes stored history: roles, thinking, answer, and citations', async () => {
     const cookie = await activeMemberCookie()
-    // Seed the Document citation 1 maps to (issue #25 mapping, now for the
-    // stored-history list shape).
+    // Seed the Document citation [ID:19] maps to (issue #25 mapping, now for
+    // the stored-history list shape).
     const [member] = await db.select({ id: users.id }).from(users).where(eq(users.email, MEMBER.email)).limit(1)
     const [seeded] = await db
       .insert(documents)
@@ -361,10 +362,12 @@ describe('GET /chat/sessions/:id/messages', () => {
     const assistant = body.items[1]
     expect(assistant?.role).toBe('assistant')
     expect(assistant?.thinking).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
-    expect(assistant?.content).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
+    // Stored history: [ID:n] markers rewritten to [n], citations n from
+    // citation_id (issue #30).
+    expect(assistant?.content).toBe('Leave is capped at 21 days per year [19]. It resets every calendar year [41].')
     expect(assistant?.references).toEqual([
       {
-        n: 1,
+        n: 19,
         content: 'Leave is capped at 21 days per year.',
         document_name: 'Leave Policy.md',
         page: 3,
@@ -372,7 +375,7 @@ describe('GET /chat/sessions/:id/messages', () => {
         document_id: seeded!.id,
       },
       {
-        n: 2,
+        n: 41,
         content: 'It resets every calendar year.',
         document_name: 'External Handbook.pdf',
         page: null,

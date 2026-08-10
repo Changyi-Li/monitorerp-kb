@@ -10,7 +10,8 @@
 // drives it with scripted frames.
 
 export interface ChatCitation {
-  /** Matches the [n] marker in the answer. */
+  /** Matches the [n] marker in the answer (rewritten from the agent's [ID:n]
+   * markers by the transform — issue #30). */
   n: number
   /** The cited chunk passage — leads the source card. */
   content: string
@@ -42,8 +43,12 @@ export type DocumentIdLookup = (ragflowDocumentId: string) => string | null
 const OPEN_TAG = '<think>'
 const CLOSE_TAG = '</think>'
 
-/** The longest fragment of a tag that could still be a split-tag prefix. */
-const OPEN_HOLD = OPEN_TAG.length - 1
+/** The real agent's citation-marker prefix (issue #30): it cites with
+ * `[ID:<citation id>]` where the id is an arbitrary integer — the chunks-map
+ * key / stored citation_id — never the [n] ordinals the contract promises. */
+const MARKER_PREFIX = '[ID:'
+
+/** The longest fragment of the close tag that could still be a split-tag suffix. */
 const CLOSE_HOLD = CLOSE_TAG.length - 1
 
 interface ParsedFrame {
@@ -105,22 +110,50 @@ function normalizeCitation(
 }
 
 /**
+ * The [ID:n] marker key for a STORED-HISTORY citation: its numeric
+ * `citation_id` (issue #30). The stored list is in retrieval order, which is
+ * NOT the citation numbering the agent's markers use — list order would map
+ * [ID:41] to the wrong chunk. Accepts the real wire's string form (verified
+ * live 2026-08-10) and a JSON-number form defensively. Items whose
+ * citation_id is missing or non-numeric resolve to NaN and are dropped by
+ * normalizeCitation (no marker could ever match them).
+ */
+function storedCitationNumber(item: unknown): number {
+  const citationId = (item as { citation_id?: unknown } | null)?.citation_id
+  return typeof citationId === 'string' || typeof citationId === 'number' ? Number(citationId) : Number.NaN
+}
+
+/**
  * Normalizes the TWO raw citation shapes (research #20) into the one contract
- * shape: the live object `{chunks: {<ordinal>: …}}` from message_end, and the
- * stored-history LIST of items (ordinals from list order).
+ * shape: the live object `{chunks: {<citation id>: …}}` from message_end
+ * (n = the map key — already the marker number), and the stored-history LIST
+ * of items (n = the item's numeric citation_id).
  */
 export function normalizeReference(reference: unknown, documentIdLookup: DocumentIdLookup): ChatCitation[] {
   if (reference === null || typeof reference !== 'object') return []
   if (Array.isArray(reference)) {
     return reference
-      .map((item, index) => normalizeCitation(item, index + 1, documentIdLookup))
+      .map((item) => normalizeCitation(item, storedCitationNumber(item), documentIdLookup))
       .filter((c): c is ChatCitation => c !== null)
   }
   const chunks = (reference as { chunks?: unknown }).chunks
   if (chunks === null || typeof chunks !== 'object' || Array.isArray(chunks)) return []
+  // The live map keys ARE the citation ids the [ID:n] markers use.
   return Object.entries(chunks as Record<string, unknown>)
-    .map(([ordinal, item]) => normalizeCitation(item, Number(ordinal), documentIdLookup))
+    .map(([citationId, item]) => normalizeCitation(item, Number(citationId), documentIdLookup))
     .filter((c): c is ChatCitation => c !== null)
+}
+
+/**
+ * Rewrites the real agent's `[ID:<citation id>]` markers to the contract's
+ * [n] form in a COMPLETE content string (the stored-history path, where the
+ * whole message is at hand). The streaming path's scanAnswer performs the
+ * same rewrite statefully across deltas (issue #30).
+ */
+export function normalizeAnswerMarkers(content: string): string {
+  // ASCII digits only — the streaming scanAnswer accepts the same range, so
+  // the whole-string and delta paths can never disagree on a marker.
+  return content.replace(/\[ID:([0-9]+)\]/g, '[$1]')
 }
 
 /**
@@ -167,19 +200,27 @@ export function createCompletionTransform(options: {
   let sessionEmitted = false
   let referencesEmitted = false
   let inThink = false
-  // Split-tag lookahead: text that must not be emitted yet because a tag may
-  // be cut mid-delta. Bounded by the tag lengths.
+  // Split-tag/marker lookahead: text that must not be emitted yet because a
+  // tag or citation marker may be cut mid-delta. Bounded by the tag lengths,
+  // or by a split [ID:n] marker's digit run.
   let buffer = ''
 
   /**
    * Splits a content delta into answer parts, tracking the <think> state
-   * across deltas. A tag that a delta cuts in half resolves once the next
-   * delta lands; the buffer holds only the ambiguous suffix.
+   * across deltas, and rewrites the agent's [ID:n] citation markers to the
+   * contract's [n] form (issue #30). A tag or marker that a delta cuts in
+   * half — '<thi' open, '</th' close, '[ID:', or a marker's digit run at the
+   * frame boundary — resolves once the next delta lands; the buffer holds
+   * only the ambiguous suffix.
    */
   const scanAnswer = (content: string): ChatTransformEvent[] => {
     const out: ChatTransformEvent[] = []
     buffer += content
-    while (buffer.length > 0) {
+    // A held fragment is suspended until the next frame arrives — once a
+    // branch holds, the scan is done for this frame (the held text would
+    // otherwise rescan identically forever).
+    let done = false
+    while (!done && buffer.length > 0) {
       if (inThink) {
         const close = buffer.indexOf(CLOSE_TAG)
         if (close === -1) {
@@ -188,30 +229,84 @@ export function createCompletionTransform(options: {
             out.push({ type: 'thinking', delta: buffer.slice(0, -CLOSE_HOLD) })
           }
           buffer = buffer.slice(-CLOSE_HOLD)
-          break
+          done = true
+        } else {
+          if (close > 0) out.push({ type: 'thinking', delta: buffer.slice(0, close) })
+          inThink = false
+          buffer = buffer.slice(close + CLOSE_TAG.length)
         }
-        if (close > 0) out.push({ type: 'thinking', delta: buffer.slice(0, close) })
-        inThink = false
-        buffer = buffer.slice(close + CLOSE_TAG.length)
       } else {
-        const open = buffer.indexOf(OPEN_TAG)
-        if (open === -1) {
-          // Emit everything except a possible open-tag fragment cut mid-delta:
-          // the last '<' whose suffix is a strict prefix of <think> is held
-          // for the next frame. Ordinary text (no pending '<') flows through
-          // in full within the same frame.
-          let hold = 0
-          const tag = buffer.lastIndexOf('<')
-          if (tag !== -1 && buffer.length - tag <= OPEN_HOLD && OPEN_TAG.startsWith(buffer.slice(tag))) {
-            hold = buffer.length - tag
+        // Scan for the next '<' (think-tag open) or '[' (citation marker).
+        // Text and rewritten markers accumulate into one answer delta per
+        // frame; a tag or marker fragment cut mid-delta is held for the next.
+        let pending = ''
+        while (buffer.length > 0) {
+          const lt = buffer.indexOf('<')
+          const lb = buffer.indexOf('[')
+          const pos = lt === -1 ? lb : lb === -1 ? lt : Math.min(lt, lb)
+          if (pos === -1) {
+            pending += buffer
+            buffer = ''
+            break
           }
-          if (buffer.length > hold) out.push({ type: 'answer', delta: buffer.slice(0, buffer.length - hold) })
-          buffer = hold > 0 ? buffer.slice(-hold) : ''
-          break
+          if (buffer.charAt(pos) === '<') {
+            const suffix = buffer.slice(pos)
+            if (suffix.length < OPEN_TAG.length && OPEN_TAG.startsWith(suffix)) {
+              // Split open-tag prefix — hold for the next frame.
+              pending += buffer.slice(0, pos)
+              buffer = buffer.slice(pos)
+              break
+            }
+            if (suffix.startsWith(OPEN_TAG)) {
+              pending += buffer.slice(0, pos)
+              buffer = buffer.slice(pos + OPEN_TAG.length)
+              inThink = true
+              break
+            }
+            // A literal '<' that is not a tag start.
+            pending += buffer.slice(0, pos + 1)
+            buffer = buffer.slice(pos + 1)
+          } else {
+            const suffix = buffer.slice(pos)
+            if (suffix.length < MARKER_PREFIX.length && MARKER_PREFIX.startsWith(suffix)) {
+              // Split marker prefix ('[', '[I', '[ID') — hold for the next frame.
+              pending += buffer.slice(0, pos)
+              buffer = buffer.slice(pos)
+              break
+            }
+            if (suffix.startsWith(MARKER_PREFIX)) {
+              // '[ID:<digits>]' — a complete marker is appended rewritten as
+              // [n]; digits at the frame boundary are held until ']' (or a
+              // non-digit) lands, because a digit run may still be a marker.
+              let j = pos + MARKER_PREFIX.length
+              while (j < buffer.length && buffer.charAt(j) >= '0' && buffer.charAt(j) <= '9') j++
+              const digits = buffer.slice(pos + MARKER_PREFIX.length, j)
+              if (j < buffer.length && buffer.charAt(j) === ']' && digits.length > 0) {
+                pending += buffer.slice(0, pos)
+                pending += `[${digits}]`
+                buffer = buffer.slice(j + 1)
+                continue
+              }
+              if (j === buffer.length) {
+                // Mid-marker at the end of the frame — hold everything from '['.
+                pending += buffer.slice(0, pos)
+                buffer = buffer.slice(pos)
+                break
+              }
+              // '[ID:…' that never completes as a marker — plain text.
+              pending += buffer.slice(0, j)
+              buffer = buffer.slice(j)
+            } else {
+              // A literal '[' that is not a marker start.
+              pending += buffer.slice(0, pos + 1)
+              buffer = buffer.slice(pos + 1)
+            }
+          }
         }
-        if (open > 0) out.push({ type: 'answer', delta: buffer.slice(0, open) })
-        inThink = true
-        buffer = buffer.slice(open + OPEN_TAG.length)
+        if (pending !== '') out.push({ type: 'answer', delta: pending })
+        // A tag open hands the scan to the think branch; everything else
+        // (buffer exhausted or a held fragment) ends this frame's scan.
+        if (!inThink) done = true
       }
     }
     return out
@@ -228,9 +323,9 @@ export function createCompletionTransform(options: {
     if (data === null || data === '') return terminalError('RagFlow returned an unparseable stream frame')
 
     if (data === '[DONE]') {
-      // The held buffer is an unclosed tag fragment (dropped — it is not
-      // answer text) or, when the stream ends mid-thinking, a fragment of
-      // reasoning that was already streamed as earlier thinking deltas —
+      // The held buffer is an unclosed tag or marker fragment (dropped — it
+      // is not answer text) or, when the stream ends mid-thinking, a fragment
+      // of reasoning that was already streamed as earlier thinking deltas —
       // emit it so the reconstructed reasoning is not truncated.
       finished = true
       const thinkingTail = inThink && buffer.length > 0 ? [{ type: 'thinking' as const, delta: buffer }] : []

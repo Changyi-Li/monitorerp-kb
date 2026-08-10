@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { createCompletionTransform, splitThinking, type ChatTransformEvent } from '../src/chat/transform.js'
+import {
+  createCompletionTransform,
+  normalizeAnswerMarkers,
+  splitThinking,
+  type ChatTransformEvent,
+} from '../src/chat/transform.js'
 import { realCompletionFrame } from './ragflow-wire.js'
 
 // Real RagFlow agent SSE frames (captured live from the deployed agent on
@@ -190,21 +195,23 @@ describe('completion transform — errors', () => {
   })
 })
 
-// Citation fixtures per research #20: the LIVE shape is an object
-// `reference: {chunks: {<ordinal>: {content, document_id, document_name,
-// dataset_id, positions}}}` from message_end; the STORED-HISTORY shape is a
-// LIST of `{citation_id, content, document_id, document_name, id,
-// positions}` items.
+// Citation fixtures per research #20, on the REAL agent wire (issue #30):
+// the LIVE shape is `reference: {chunks: {<citation id>: {content,
+// document_id, document_name, dataset_id, positions}}}` from message_end
+// where the map key is an ARBITRARY integer the agent cites as [ID:<key>]
+// (captured 2026-08-10 — keys 19/21/25/34/41/…, never ordinals); the
+// STORED-HISTORY shape is a LIST of {citation_id, content, document_id,
+// document_name, id, positions} items whose `citation_id` is that same key.
 const LIVE_REFERENCE = {
   chunks: {
-    '1': {
+    '19': {
       content: 'Leave is capped at 21 days per year.',
       document_id: 'ragflow-doc-1',
       document_name: 'Leave Policy.md',
       dataset_id: 'ds',
       positions: [[3, 0.1, 0.2, 0.8, 0.05]],
     },
-    '2': {
+    '41': {
       content: 'It resets every calendar year.',
       document_id: 'ragflow-doc-2',
       document_name: 'Handbook.pdf',
@@ -216,7 +223,7 @@ const LIVE_REFERENCE = {
 
 const HISTORY_REFERENCE = [
   {
-    citation_id: 'c1',
+    citation_id: '19',
     content: 'Submit the Purchase Arrivals form within two business days.',
     document_id: 'ragflow-doc-1',
     document_name: 'Leave Policy.md',
@@ -224,7 +231,7 @@ const HISTORY_REFERENCE = [
     positions: [[1, 0.0, 0.1, 0.5, 0.2]],
   },
   {
-    citation_id: 'c2',
+    citation_id: '41',
     content: 'Late submissions require written approval.',
     document_id: 'ragflow-doc-2',
     document_name: 'Handbook.pdf',
@@ -245,7 +252,7 @@ describe('completion transform — citations', () => {
         type: 'references',
         items: [
           {
-            n: 1,
+            n: 19,
             content: 'Leave is capped at 21 days per year.',
             document_name: 'Leave Policy.md',
             page: 3,
@@ -253,7 +260,7 @@ describe('completion transform — citations', () => {
             document_id: 'our-doc-1',
           },
           {
-            n: 2,
+            n: 41,
             content: 'It resets every calendar year.',
             document_name: 'Handbook.pdf',
             page: null,
@@ -265,14 +272,14 @@ describe('completion transform — citations', () => {
     ])
   })
 
-  it('normalizes the stored-history list shape with 1-based ordinals', () => {
+  it('normalizes the stored-history list shape with citation_id as n', () => {
     const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
     expect(t.feed(messageEnd(undefined, HISTORY_REFERENCE))).toEqual([
       {
         type: 'references',
         items: [
           {
-            n: 1,
+            n: 19,
             content: 'Submit the Purchase Arrivals form within two business days.',
             document_name: 'Leave Policy.md',
             page: 1,
@@ -280,7 +287,7 @@ describe('completion transform — citations', () => {
             document_id: 'our-doc-1',
           },
           {
-            n: 2,
+            n: 41,
             content: 'Late submissions require written approval.',
             document_name: 'Handbook.pdf',
             page: null,
@@ -303,14 +310,60 @@ describe('completion transform — citations', () => {
     const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
     const reference = {
       chunks: {
-        '1': { content: 'kept', document_id: 'ragflow-doc-1', document_name: 'A.md', positions: [] },
-        '2': { content: 'dropped — no document_id', document_name: 'B.md', positions: [] },
+        '19': { content: 'kept', document_id: 'ragflow-doc-1', document_name: 'A.md', positions: [] },
+        '41': { content: 'dropped — no document_id', document_name: 'B.md', positions: [] },
       },
     }
     const events = t.feed(messageEnd(undefined, reference))
     expect(events).toEqual([
-      { type: 'references', items: [expect.objectContaining({ n: 1, document_id: 'our-doc-1' })] },
+      { type: 'references', items: [expect.objectContaining({ n: 19, document_id: 'our-doc-1' })] },
     ])
+  })
+
+  it('uses the stored item\'s citation_id as n — never list order (issue #30)', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    const reference = [
+      { citation_id: '19', content: 'a', document_id: 'ragflow-doc-1', document_name: 'A.md', positions: [] },
+      { citation_id: '41', content: 'b', document_id: 'ragflow-doc-2', document_name: 'B.md', positions: [] },
+    ]
+    const events = t.feed(messageEnd(undefined, reference))
+    expect(events).toEqual([
+      {
+        type: 'references',
+        items: [expect.objectContaining({ n: 19 }), expect.objectContaining({ n: 41 })],
+      },
+    ])
+  })
+
+  it('accepts a JSON-number citation_id as well as the real wire\'s string form', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    const reference = [
+      { citation_id: 19, content: 'a', document_id: 'ragflow-doc-1', document_name: 'A.md', positions: [] },
+      { citation_id: '41', content: 'b', document_id: 'ragflow-doc-2', document_name: 'B.md', positions: [] },
+    ]
+    const events = t.feed(messageEnd(undefined, reference))
+    expect(events).toEqual([
+      {
+        type: 'references',
+        items: [expect.objectContaining({ n: 19 }), expect.objectContaining({ n: 41 })],
+      },
+    ])
+  })
+
+  it('drops stored items whose citation_id could never match a marker', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    const reference = [
+      {
+        citation_id: 'c1', // non-numeric — no [ID:n] marker can ever match it
+        content: 'dropped',
+        document_id: 'ragflow-doc-1',
+        document_name: 'A.md',
+        positions: [],
+      },
+      { citation_id: '41', content: 'kept', document_id: 'ragflow-doc-2', document_name: 'B.md', positions: [] },
+    ]
+    const events = t.feed(messageEnd(undefined, reference))
+    expect(events).toEqual([{ type: 'references', items: [expect.objectContaining({ n: 41 })] }])
   })
 
   it('emits no references event for an absent or empty reference', () => {
@@ -323,12 +376,72 @@ describe('completion transform — citations', () => {
   it('emits references once, after the answer and before done', () => {
     const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
     const events = [
-      ...t.feed(message('The policy [1].')),
+      ...t.feed(message('The policy [ID:1].')),
       ...t.feed(messageEnd(undefined, LIVE_REFERENCE)),
       ...t.feed(messageEnd(undefined, LIVE_REFERENCE)), // a second message_end is ignored
       ...t.feed(doneFrame()),
     ]
     expect(events.map((e) => e.type)).toEqual(['answer', 'references', 'done'])
+  })
+})
+
+describe('completion transform — [ID:n] marker rewriting (issue #30)', () => {
+  it('rewrites a complete [ID:n] marker to [n] in the answer', () => {
+    const t = createCompletionTransform({ lazy: false })
+    expect(t.feed(message('Leave is capped at 21 days [ID:19].'))).toEqual([
+      { type: 'answer', delta: 'Leave is capped at 21 days [19].' },
+    ])
+  })
+
+  it('rewrites adjacent markers in the same delta', () => {
+    const t = createCompletionTransform({ lazy: false })
+    expect(t.feed(message('Create via Save As [ID:19][ID:41].'))).toEqual([
+      { type: 'answer', delta: 'Create via Save As [19][41].' },
+    ])
+  })
+
+  it('rewrites a marker split across deltas (prefix held)', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [message('Register new components [ID:'), message('19].')])
+    expect(answerText(events)).toBe('Register new components [19].')
+  })
+
+  it('rewrites a marker whose digits split across deltas', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [message('See the part register [ID:1'), message('9]'), message(' for details.')])
+    expect(answerText(events)).toBe('See the part register [19] for details.')
+  })
+
+  it('does not rewrite bracket text that is not an [ID:n] marker', () => {
+    const t = createCompletionTransform({ lazy: false })
+    expect(t.feed(message('See [IDs: 3] and [ID:x] and [ID:] text.'))).toEqual([
+      { type: 'answer', delta: 'See [IDs: 3] and [ID:x] and [ID:] text.' },
+    ])
+  })
+
+  it('drops an incomplete marker fragment when the stream dies at [DONE]', () => {
+    const t = createCompletionTransform({ lazy: false })
+    expect(t.feed(message('Tail cut mid-marker [ID:4'))).toEqual([{ type: 'answer', delta: 'Tail cut mid-marker ' }])
+    expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
+  })
+
+  it('does not rewrite markers inside <think> reasoning', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [message('<think>Consider [ID:19] as a candidate</think>Answer [ID:19].')])
+    expect(thinkingText(events)).toBe('Consider [ID:19] as a candidate')
+    expect(answerText(events)).toBe('Answer [19].')
+  })
+})
+
+describe('normalizeAnswerMarkers — stored-history content (issue #30)', () => {
+  it('rewrites every [ID:n] marker in a whole string', () => {
+    expect(normalizeAnswerMarkers('Per the register [ID:19], delete [ID:41] and [ID:172].')).toBe(
+      'Per the register [19], delete [41] and [172].',
+    )
+  })
+
+  it('leaves strings without markers untouched', () => {
+    expect(normalizeAnswerMarkers('Plain answer without citations.')).toBe('Plain answer without citations.')
   })
 })
 
@@ -358,7 +471,7 @@ describe('completion transform — full stream shape', () => {
     const t = createCompletionTransform({ lazy: true })
     const frames = [
       message('<think>The user asks', 'ragflow-session-9'),
-      message(' about leave policy.</think>Leave is capped at 21 days per year [1].'),
+      message(' about leave policy.</think>Leave is capped at 21 days per year [ID:19].'),
       messageEnd('ragflow-session-9'),
       nodeFinished(),
       doneFrame(),
@@ -366,7 +479,7 @@ describe('completion transform — full stream shape', () => {
     const events = allEvents(t, frames)
     expect(events.filter((e) => e.type !== 'thinking')).toEqual([
       { type: 'session', id: 'ragflow-session-9' },
-      { type: 'answer', delta: 'Leave is capped at 21 days per year [1].' },
+      { type: 'answer', delta: 'Leave is capped at 21 days per year [19].' },
       { type: 'done' },
     ])
     expect(thinkingText(events)).toBe('The user asks about leave policy.')
