@@ -7,7 +7,7 @@
 // references), not RagFlow's raw wire format, since the proxy normalizes both
 // the inline <think> tags and the two citation shapes (research #20).
 
-import { ChevronDown, ExternalLink, Send, Sparkles, X } from "lucide-react";
+import { ChevronDown, ExternalLink, Send, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -452,13 +452,29 @@ export function CitationCard({ citation, highlighted }: { citation: ChatCitation
 }
 
 export function SourcesPanel({ citations, highlight }: { citations?: ChatCitation[]; highlight?: number }) {
+  const [open, setOpen] = useState(false);
   if (citations === undefined || citations.length === 0) return null;
   return (
-    <div className="mt-3 space-y-2">
-      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sources</p>
-      {citations.map((c) => (
-        <CitationCard key={c.ordinal} citation={c} highlighted={highlight === c.ordinal} />
-      ))}
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronDown className={cn("size-3.5 transition-transform", open ? "" : "-rotate-90")} aria-hidden />
+        Sources
+        <span className="rounded-full bg-muted px-1.5 tracking-normal text-muted-foreground tabular-nums normal-case">
+          {citations.length}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {citations.map((c) => (
+            <CitationCard key={c.ordinal} citation={c} highlighted={highlight === c.ordinal} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -506,21 +522,8 @@ export function MessageBubble({
         </div>
 
         {focusedCitation !== undefined && (
-          <div className="mt-3 overflow-hidden rounded-lg border border-primary/30 bg-primary/5">
-            <div className="flex items-center justify-between px-3 py-1.5 text-xs font-medium text-muted-foreground">
-              <span>Cited source {focusedCitation.ordinal}</span>
-              <button
-                type="button"
-                onClick={() => setFocused(null)}
-                aria-label="Collapse cited source"
-                className="-mr-1 rounded p-1 transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <X className="size-3" aria-hidden />
-              </button>
-            </div>
-            <div className="px-2 pb-2">
-              <CitationCard citation={focusedCitation} highlighted />
-            </div>
+          <div className="mt-3">
+            <CitationCard citation={focusedCitation} highlighted />
           </div>
         )}
 
