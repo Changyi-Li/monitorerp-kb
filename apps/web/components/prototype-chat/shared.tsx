@@ -83,14 +83,10 @@ const CITE_OURS_2: ChatCitation = {
 const SEED_SESSIONS: ChatSession[] = [
   {
     id: "s1",
-    title: "How do I report a purchase arrival?",
+    title: "Reporting & reconciling purchase arrivals",
     updatedAt: new Date(now() - 2 * HOUR).toISOString(),
     messages: [
-      {
-        id: "s1m1",
-        role: "user",
-        content: "How do I report a purchase arrival?",
-      },
+      { id: "s1m1", role: "user", content: "How do I report a purchase arrival?" },
       {
         id: "s1m2",
         role: "assistant",
@@ -98,7 +94,49 @@ const SEED_SESSIONS: ChatSession[] = [
           "The user is asking about reporting purchase arrivals. The Purchase Arrivals doc says submit within 48h of receipt; the Supplier Policy covers late submissions. I'll cite both.",
         content:
           "Purchase arrivals are reported via the Purchase Arrivals form [1], submitted within 48 hours of goods receipt. Late submissions require written supervisor approval [2].",
-        citations: [CITE_OURS, CITE_EXTERNAL],
+        citations: [{ ...CITE_OURS, ordinal: 1 }, { ...CITE_EXTERNAL, ordinal: 2 }],
+      },
+      { id: "s1m3", role: "user", content: "What counts as goods receipt — the delivery date, or when we inspect it?" },
+      {
+        id: "s1m4",
+        role: "assistant",
+        thinking: "Receipt vs inspection: receipt is physical arrival plus sign-off. The 48-hour clock starts at receipt, not inspection.",
+        content:
+          "Goods receipt is when the shipment physically arrives at your warehouse and is signed for — not the inspection date. Inspection can happen afterward, but the 48-hour clock starts at receipt.",
+      },
+      { id: "s1m5", role: "user", content: "What happens if I miss the 48-hour window?" },
+      {
+        id: "s1m6",
+        role: "assistant",
+        thinking: "Late submission policy: supervisor approval plus a reason code. Cite the supplier policy.",
+        content:
+          "Late submissions require written supervisor approval and a reason code before the form is accepted [1]. Repeated late filings may flag the supplier for review.",
+        citations: [{ ...CITE_EXTERNAL, ordinal: 1 }],
+      },
+      { id: "s1m7", role: "user", content: "Can I batch several arrivals into one form?" },
+      {
+        id: "s1m8",
+        role: "assistant",
+        thinking: "Batching: each arrival is its own form, for traceability to the PO and supplier. No batching.",
+        content:
+          "No — each purchase arrival needs its own form so each can be traced to its PO and supplier. If you have several, submit them back-to-back; the system queues them.",
+      },
+      { id: "s1m9", role: "user", content: "Once submitted, where does the data go?" },
+      {
+        id: "s1m10",
+        role: "assistant",
+        thinking: "Data flow: arrivals register updates stock on hand, which feeds the end-of-day reconciliation. Cite the arrivals doc.",
+        content: "The form posts the arrival to the arrivals register, which updates stock on hand and feeds the end-of-day reconciliation [1].",
+        citations: [{ ...CITE_OURS, ordinal: 1 }],
+      },
+      { id: "s1m11", role: "user", content: "And reconciliation compares that against what?" },
+      {
+        id: "s1m12",
+        role: "assistant",
+        thinking: "Reconciliation compares system stock to the floor's counted stock, then posts adjustments. Cite the recon procedure.",
+        content:
+          "Reconciliation compares the system stock (updated by these arrivals) against the counted stock from the floor, then posts any adjustments [1].",
+        citations: [{ ...CITE_OURS_2, ordinal: 1 }],
       },
     ],
   },
