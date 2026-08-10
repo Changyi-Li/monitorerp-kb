@@ -28,40 +28,66 @@ const rejected = (messageText: string): string =>
 const allEvents = (transform: { feed: (f: string) => ChatTransformEvent[] }, frames: string[]): ChatTransformEvent[] =>
   frames.flatMap((f) => transform.feed(f))
 
-describe('completion transform — <think> stripping', () => {
-  it('strips a complete <think> block inside one delta', () => {
+/** Joins every thinking delta — the tag-hold fragments chunk them unevenly. */
+const thinkingText = (events: ChatTransformEvent[]): string =>
+  events
+    .filter((e): e is Extract<ChatTransformEvent, { type: 'thinking' }> => e.type === 'thinking')
+    .map((e) => e.delta)
+    .join('')
+
+/** Joins every answer delta — the tag-hold fragments chunk them unevenly. */
+const answerText = (events: ChatTransformEvent[]): string =>
+  events
+    .filter((e): e is Extract<ChatTransformEvent, { type: 'answer' }> => e.type === 'answer')
+    .map((e) => e.delta)
+    .join('')
+
+describe('completion transform — thinking vs answer', () => {
+  it('emits a thinking delta for the <think> block and an answer delta for the rest', () => {
     const t = createCompletionTransform({ lazy: false })
     expect(t.feed(message('<think>Reasoning here.</think>The leave policy allows 21 days.'))).toEqual([
+      { type: 'thinking', delta: 'Reasoning here.' },
       { type: 'answer', delta: 'The leave policy allows 21 days.' },
     ])
   })
 
-  it('keeps the thinking phase out of the answer across frames', () => {
+  it('emits thinking deltas for the thinking phase and answer deltas for the rest', () => {
     const t = createCompletionTransform({ lazy: false })
-    expect(t.feed(message('<think>Step one'))).toEqual([])
-    expect(t.feed(message(' two.'))).toEqual([])
-    expect(t.feed(message('</think>Here is the'))).toEqual([{ type: 'answer', delta: 'Here is the' }])
-    expect(t.feed(message(' answer.'))).toEqual([{ type: 'answer', delta: ' answer.' }])
+    const events = allEvents(t, [
+      message('<think>Step one'),
+      message(' two.'),
+      message('</think>Here is the'),
+      message(' answer.'),
+    ])
+    expect(answerText(events)).toBe('Here is the answer.')
+    expect(thinkingText(events)).toBe('Step one two.')
   })
 
-  it('handles an open tag split across deltas', () => {
+  it('handles an open tag split across deltas, thinking and answer both intact', () => {
     const t = createCompletionTransform({ lazy: false })
-    expect(t.feed(message('Answer starts. <thi'))).toEqual([{ type: 'answer', delta: 'Answer starts. ' }])
-    expect(t.feed(message('nk>hidden reasoning'))).toEqual([])
-    expect(t.feed(message('</think>'))).toEqual([])
-    expect(t.feed(message(' visible answer'))).toEqual([{ type: 'answer', delta: ' visible answer' }])
+    const events = allEvents(t, [
+      message('Answer starts. <thi'),
+      message('nk>hidden reasoning'),
+      message('</think>'),
+      message(' visible answer'),
+    ])
+    expect(answerText(events)).toBe('Answer starts.  visible answer')
+    expect(thinkingText(events)).toBe('hidden reasoning')
   })
 
   it('handles a close tag split across deltas', () => {
     const t = createCompletionTransform({ lazy: false })
-    expect(t.feed(message('<think>reasoning text</thi'))).toEqual([])
-    expect(t.feed(message('nk>Answer text.'))).toEqual([{ type: 'answer', delta: 'Answer text.' }])
+    const events = allEvents(t, [message('<think>reasoning text</thi'), message('nk>Answer text.')])
+    expect(thinkingText(events)).toBe('reasoning text')
+    expect(answerText(events)).toBe('Answer text.')
   })
 
-  it('strips multiple think blocks within one delta', () => {
+  it('interleaves multiple think blocks within one delta', () => {
     const t = createCompletionTransform({ lazy: false })
     expect(t.feed(message('<think>a</think>One<think>b</think>Two'))).toEqual([
+      { type: 'thinking', delta: 'a' },
       { type: 'answer', delta: 'One' },
+      { type: 'thinking', delta: 'b' },
       { type: 'answer', delta: 'Two' },
     ])
   })
@@ -112,6 +138,15 @@ describe('completion transform — events', () => {
     expect(t.feed(messageEnd())).toEqual([])
     expect(t.feed(nodeFinished())).toEqual([])
     expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
+  })
+
+  it('emits the held thinking fragment when the stream ends mid-thinking', () => {
+    const t = createCompletionTransform({ lazy: false })
+    // The close tag never arrives; the held reasoning fragment must not be
+    // truncated from the reconstructed thinking.
+    const events = allEvents(t, [message('<think>thinking text'), doneFrame()])
+    expect(thinkingText(events)).toBe('thinking text')
+    expect(events.at(-1)).toEqual({ type: 'done' })
   })
 
   it('emits done on [DONE] and ignores later frames', () => {
@@ -307,10 +342,12 @@ describe('completion transform — full stream shape', () => {
       nodeFinished(),
       doneFrame(),
     ]
-    expect(allEvents(t, frames)).toEqual([
+    const events = allEvents(t, frames)
+    expect(events.filter((e) => e.type !== 'thinking')).toEqual([
       { type: 'session', id: 'ragflow-session-9' },
       { type: 'answer', delta: 'Leave is capped at 21 days per year [1].' },
       { type: 'done' },
     ])
+    expect(thinkingText(events)).toBe('The user asks about leave policy.')
   })
 })

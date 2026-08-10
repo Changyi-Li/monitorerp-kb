@@ -153,6 +153,8 @@ export function chatRoutes(deps: Deps) {
                 if (row === undefined) throw new Error('INSERT ... RETURNING returned no row')
                 createdRowId = row.id
                 emit('session', { id: row.id })
+              } else if (event.type === 'thinking') {
+                emit('thinking', { delta: event.delta })
               } else if (event.type === 'answer') {
                 emit('answer', { delta: event.delta })
               } else if (event.type === 'references') {

@@ -41,6 +41,7 @@ export interface ChatCitation {
 
 export type ChatStreamEvent =
   | { type: "session"; id: string }
+  | { type: "thinking"; delta: string }
   | { type: "answer"; delta: string }
   | { type: "references"; items: ChatCitation[] }
   | { type: "done" }
@@ -104,6 +105,8 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
   switch (event) {
     case "session":
       return { type: "session", id: payload.id ?? "" };
+    case "thinking":
+      return { type: "thinking", delta: payload.delta ?? "" };
     case "answer":
       return { type: "answer", delta: payload.delta ?? "" };
     case "references":

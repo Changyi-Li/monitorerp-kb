@@ -163,6 +163,31 @@ test.describe('chat', () => {
     await expect(panel.getByRole('button', { name: 'Close details' })).toBeVisible()
   })
 
+  test('Show thinking toggles the collapsible reasoning pane', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    await composer.fill(`Reasoning ${RUN_TAG}`)
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    // The reasoning pane is collapsed by default: its content is not rendered.
+    const reasoning = 'The user asks about the leave policy. The policy states 21 days per year.'
+    await expect(page.getByText(reasoning, { exact: false })).not.toBeVisible()
+
+    const toggle = page.getByRole('button', { name: 'Show thinking' })
+    await expect(toggle).toBeVisible()
+    await toggle.click()
+    await expect(page.getByText(reasoning, { exact: false })).toBeVisible()
+
+    // Toggling again collapses it.
+    await page.getByRole('button', { name: 'Hide thinking' }).click()
+    await expect(page.getByText(reasoning, { exact: false })).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Show thinking' })).toBeVisible()
+  })
+
   test('the Chat nav item is visible to members too', async ({ page, request }) => {
     const email = uniqueEmail('chatmember')
     await apiSignUp(request, email)

@@ -1,9 +1,9 @@
 // The core streaming logic: a pure, framework-agnostic transform that
 // consumes RagFlow agent SSE frames and emits the normalized event contract
-// (chatbot spec #23; this slice adds citations — reasoning is still
-// dropped). Reasoning arrives inline as literal <think>…</think> tags that
-// may span multiple deltas (research #20); the transform strips them
-// statefully so the client never parses tags.
+// (chatbot spec #23). Reasoning arrives inline as literal <think>…</think>
+// tags that may span multiple deltas (research #20); the transform splits
+// each delta into thinking and answer events statefully, so the client never
+// parses tags.
 //
 // The transform is deliberately DB- and HTTP-free: the route wires it to real
 // RagFlow SSE and injects the citation→Document lookup, and the unit test
@@ -24,6 +24,7 @@ export interface ChatCitation {
 
 export type ChatTransformEvent =
   | { type: 'session'; id: string }
+  | { type: 'thinking'; delta: string }
   | { type: 'answer'; delta: string }
   | { type: 'references'; items: ChatCitation[] }
   | { type: 'done' }
@@ -144,10 +145,14 @@ export function createCompletionTransform(options: {
       if (inThink) {
         const close = buffer.indexOf(CLOSE_TAG)
         if (close === -1) {
-          // All thinking — discard everything but a possible split close-tag.
+          // All thinking — emit everything but a possible split close-tag.
+          if (buffer.length > CLOSE_HOLD) {
+            out.push({ type: 'thinking', delta: buffer.slice(0, -CLOSE_HOLD) })
+          }
           buffer = buffer.slice(-CLOSE_HOLD)
           break
         }
+        if (close > 0) out.push({ type: 'thinking', delta: buffer.slice(0, close) })
         inThink = false
         buffer = buffer.slice(close + CLOSE_TAG.length)
       } else {
@@ -185,10 +190,14 @@ export function createCompletionTransform(options: {
     if (data === null || data === '') return terminalError('RagFlow returned an unparseable stream frame')
 
     if (data === '[DONE]') {
-      // The held buffer is only ever an unclosed tag fragment or thinking —
-      // both correctly dropped at stream end.
+      // The held buffer is an unclosed tag fragment (dropped — it is not
+      // answer text) or, when the stream ends mid-thinking, a fragment of
+      // reasoning that was already streamed as earlier thinking deltas —
+      // emit it so the reconstructed reasoning is not truncated.
       finished = true
-      return [{ type: 'done' }]
+      const thinkingTail = inThink && buffer.length > 0 ? [{ type: 'thinking' as const, delta: buffer }] : []
+      buffer = ''
+      return [...thinkingTail, { type: 'done' }]
     }
 
     let payload: FramePayload

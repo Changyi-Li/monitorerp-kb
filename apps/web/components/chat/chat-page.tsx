@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Plus, Send, Sparkles } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Send, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +21,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  thinking?: string;
   citations?: ChatCitation[];
 }
 
@@ -161,6 +162,8 @@ export function ChatPage() {
               },
               ...prev,
             ]);
+          } else if (event.type === "thinking") {
+            patchAssistant((m) => ({ ...m, thinking: (m.thinking ?? "") + event.delta }));
           } else if (event.type === "answer") {
             patchAssistant((m) => ({ ...m, content: m.content + event.delta }));
           } else if (event.type === "references") {
@@ -285,6 +288,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <Sparkles className="size-4" aria-hidden />
       </div>
       <div className="min-w-0 flex-1">
+        <ThinkingPane thinking={message.thinking} streaming={message.streaming} />
         <div className="text-sm leading-relaxed">
           <AnswerWithCitations content={message.content} citations={message.citations} onCite={handleCite} />
           {message.streaming && message.content !== "" && (
@@ -297,6 +301,44 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsible reasoning pane — collapsed by default; "Show thinking" reveals
+ * it. While the answer is streaming with no reasoning yet, it shows a
+ * "Thinking…" indicator instead of a toggle.
+ */
+function ThinkingPane({ thinking, streaming }: { thinking?: string; streaming?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const empty = (thinking ?? "") === "" && !streaming;
+  if (empty) return null;
+  return (
+    <div className="mb-2 overflow-hidden rounded-lg border bg-muted/40">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronDown className={cn("size-3.5 transition-transform", open ? "" : "-rotate-90")} aria-hidden />
+        {streaming && (thinking ?? "") === "" ? (
+          <span className="flex items-center gap-1">
+            Thinking
+            <span className="inline-flex gap-0.5">
+              <span className="size-1 rounded-full bg-current motion-safe:animate-bounce [animation-delay:-0.3s]" />
+              <span className="size-1 rounded-full bg-current motion-safe:animate-bounce [animation-delay:-0.15s]" />
+              <span className="size-1 rounded-full bg-current motion-safe:animate-bounce" />
+            </span>
+          </span>
+        ) : (
+          <span>{open ? "Hide thinking" : "Show thinking"}</span>
+        )}
+      </button>
+      {open && (thinking ?? "") !== "" && (
+        <p className="whitespace-pre-wrap border-t px-3 py-2 text-xs leading-relaxed text-muted-foreground">{thinking}</p>
+      )}
     </div>
   );
 }

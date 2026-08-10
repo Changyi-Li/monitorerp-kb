@@ -68,11 +68,19 @@ function answerText(events: SseEvent[]): string {
     .join('')
 }
 
-/** Asserts the canonical session → answer… → references → done event order. */
+/** Joins every thinking delta — the stub splits the <think> tags across frames. */
+function thinkingText(events: SseEvent[]): string {
+  return events
+    .filter((e) => e.event === 'thinking')
+    .map((e) => e.data.delta ?? '')
+    .join('')
+}
+
+/** Asserts the canonical session → thinking… → answer… → references → done order. */
 function expectStreamShape(events: SseEvent[]): void {
   expect(events[0]?.event).toBe('session')
   expect(events.at(-1)?.event).toBe('done')
-  expect(events.slice(1, -1).every((e) => e.event === 'answer' || e.event === 'references')).toBe(true)
+  expect(events.slice(1, -1).every((e) => ['answer', 'references', 'thinking'].includes(e.event))).toBe(true)
 }
 
 /** Consumes the whole SSE body and parses it into events. */
@@ -124,7 +132,9 @@ describe('POST /chat/completions', () => {
     const sessionId = events[0]?.data.id
     expect(sessionId).toBeTypeOf('string')
     // The stub's scripted stream splits the <think> tags across deltas; the
-    // proxy strips them — only the answer reaches the client.
+    // proxy emits the reasoning as thinking deltas and only the answer as
+    // answer deltas.
+    expect(thinkingText(events)).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
     expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
 
     // The stub saw a lazy request (no session_id) and auto-created one.
@@ -148,9 +158,10 @@ describe('POST /chat/completions', () => {
     expect(sessionId).toBeTypeOf('string')
 
     const events = await sseOf(await completions(cookie, { session_id: sessionId, query: 'Follow up?' }))
-    expect(events[0]?.event).toBe('answer')
+    expect(events[0]?.event).toBe('thinking')
     expect(events.at(-1)?.event).toBe('done')
-    expect(events.slice(0, -1).every((e) => e.event === 'answer' || e.event === 'references')).toBe(true)
+    expect(events.slice(0, -1).every((e) => ['answer', 'references', 'thinking'].includes(e.event))).toBe(true)
+    expect(thinkingText(events)).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
     expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
 
     // The proxy sent the RagFlow session id this time, not a lazy request.
