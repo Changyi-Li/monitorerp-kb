@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { authMiddleware } from '../auth/middleware.js'
 import type { User } from '../auth/user.js'
 import { createCompletionTransform } from '../chat/transform.js'
-import { chatSessions } from '../db/schema.js'
+import { chatSessions, documents } from '../db/schema.js'
 import type { Deps } from '../deps.js'
 import { sendError } from '../errors.js'
 import { RagflowError } from '../ragflow/client.js'
@@ -110,7 +110,18 @@ export function chatRoutes(deps: Deps) {
     const upstreamBody: ReadableStream<Uint8Array> = upstream.body
 
     const lazy = ragflowSessionId === null
-    const transform = createCompletionTransform({ lazy })
+    // Citation→Document mapping, preloaded once per completion (the corpus
+    // is small) so the transform stays pure and synchronous: a citation
+    // whose RagFlow document id matches a Document comes back with our id,
+    // enabling the client's "Open full document" link.
+    const documentRows = await deps.db
+      .select({ id: documents.id, ragflowDocumentId: documents.ragflowDocumentId })
+      .from(documents)
+    const documentByRagflowId = new Map(documentRows.map((r) => [r.ragflowDocumentId, r.id]))
+    const transform = createCompletionTransform({
+      lazy,
+      documentIdLookup: (ragflowDocumentId) => documentByRagflowId.get(ragflowDocumentId) ?? null,
+    })
     const title = titleFromMessage(body.query)
 
     const stream = new ReadableStream<Uint8Array>({
@@ -144,6 +155,8 @@ export function chatRoutes(deps: Deps) {
                 emit('session', { id: row.id })
               } else if (event.type === 'answer') {
                 emit('answer', { delta: event.delta })
+              } else if (event.type === 'references') {
+                emit('references', { items: event.items })
               } else if (event.type === 'done') {
                 terminal = true
                 if (lazy && createdRowId === null) {

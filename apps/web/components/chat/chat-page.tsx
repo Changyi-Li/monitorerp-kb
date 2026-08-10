@@ -1,6 +1,7 @@
 "use client";
 
-import { Plus, Send, Sparkles } from "lucide-react";
+import { ExternalLink, Plus, Send, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -9,6 +10,7 @@ import {
   listChatSessions,
   streamCompletion,
   titleFromMessage,
+  type ChatCitation,
   type ChatSessionSummary,
 } from "@/lib/chat";
 import { relativeTime } from "@/lib/format";
@@ -19,6 +21,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  citations?: ChatCitation[];
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -160,6 +163,8 @@ export function ChatPage() {
             ]);
           } else if (event.type === "answer") {
             patchAssistant((m) => ({ ...m, content: m.content + event.delta }));
+          } else if (event.type === "references") {
+            patchAssistant((m) => ({ ...m, citations: event.items }));
           } else if (event.type === "error") {
             setSendError(event.message);
           }
@@ -259,6 +264,7 @@ function EmptyState() {
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
+  const [focused, setFocused] = useState<number | null>(null);
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -268,17 +274,105 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     );
   }
+  // Clicking an inline [n] chip toggles that source's card directly under
+  // the answer; clicking another marker swaps the shown card.
+  const handleCite = (n: number): void => setFocused((cur) => (cur === n ? null : n));
+  const focusedCitation = message.citations?.find((c) => c.n === focused);
+
   return (
     <div className="flex gap-3">
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
         <Sparkles className="size-4" aria-hidden />
       </div>
-      <div className="min-w-0 flex-1 text-sm leading-relaxed">
-        {message.content}
-        {message.streaming && (
-          <span className="ml-0.5 inline-block h-3.5 w-0.5 translate-y-0.5 bg-foreground/70 motion-safe:animate-pulse" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm leading-relaxed">
+          <AnswerWithCitations content={message.content} citations={message.citations} onCite={handleCite} />
+          {message.streaming && message.content !== "" && (
+            <span className="ml-0.5 inline-block h-3.5 w-0.5 translate-y-0.5 bg-foreground/70 motion-safe:animate-pulse" aria-hidden />
+          )}
+        </div>
+        {focusedCitation !== undefined && (
+          <div className="mt-3">
+            <CitationCard citation={focusedCitation} />
+          </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Renders inline [n] markers as clickable chips; unmatched markers are inert. */
+function AnswerWithCitations({
+  content,
+  citations,
+  onCite,
+}: {
+  content: string;
+  citations?: ChatCitation[];
+  onCite: (n: number) => void;
+}) {
+  const byOrdinal = new Map((citations ?? []).map((c) => [c.n, c]));
+  const parts = content.split(/(\[\d+\])/g);
+  return (
+    <>
+      {parts.map((part, idx) => {
+        const match = /^\[(\d+)\]$/.exec(part);
+        if (match === null) return <span key={idx}>{part}</span>;
+        const n = Number(match[1]);
+        const cite = byOrdinal.get(n);
+        return (
+          <button
+            key={idx}
+            type="button"
+            onClick={() => onCite(n)}
+            disabled={cite === undefined}
+            aria-label={cite !== undefined ? `Source ${n}: ${cite.document_name}` : `Source ${n}`}
+            className={cn(
+              "mx-0.5 inline-flex h-4 min-w-4 -translate-y-1.5 items-center justify-center rounded-full px-1 align-baseline text-[10px] font-semibold tabular-nums transition-colors",
+              cite !== undefined
+                ? "bg-primary/15 text-primary hover:bg-primary hover:text-primary-foreground"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {n}
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * One cited source — the card LEADS with the chunk passage and page, then
+ * shows the document name; "Open full document" appears only for our docs.
+ */
+function CitationCard({ citation }: { citation: ChatCitation }) {
+  return (
+    <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-left">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary tabular-nums">
+          {citation.n}
+        </span>
+        <p className="min-w-0 flex-1 border-l-2 pl-2 text-sm leading-relaxed text-muted-foreground">
+          {citation.content}
+        </p>
+        {citation.page !== null && (
+          <span className="shrink-0 text-xs text-muted-foreground">page {citation.page}</span>
+        )}
+      </div>
+      <p className="mt-2 truncate text-sm font-medium" title={citation.document_name}>
+        {citation.document_name}
+      </p>
+      {citation.document_id !== null && (
+        <Link
+          href={`/?doc=${citation.document_id}`}
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          title="Open this document in the Documents screen"
+        >
+          Open full document
+          <ExternalLink className="size-3" aria-hidden />
+        </Link>
+      )}
     </div>
   );
 }

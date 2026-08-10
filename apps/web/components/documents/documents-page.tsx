@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, FileText, Upload, X } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { DetailPanel } from "@/components/documents/detail-panel";
@@ -44,6 +44,7 @@ interface Kpi {
 
 export function DocumentsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<DocumentStatus | "all">("all");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -52,7 +53,9 @@ export function DocumentsPage() {
   const [data, setData] = useState<DocumentListResult | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [listError, setListError] = useState<string | null>(null);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  // Deep link from a chat citation (issue #25): /?doc=<id> opens the detail
+  // panel for that Document as soon as the list carries it.
+  const [detailId, setDetailId] = useState<string | null>(searchParams.get("doc"));
   const [detailRefreshKey, setDetailRefreshKey] = useState(0);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -168,7 +171,29 @@ export function DocumentsPage() {
     if (fileInputRef.current !== null) fileInputRef.current.value = "";
   };
 
-  const detailDocument = detailId !== null ? (items.find((d) => d.id === detailId) ?? null) : null;
+  const detailDocument = useMemo(() => {
+    if (detailId === null) return null;
+    const found = items.find((d) => d.id === detailId);
+    if (found !== undefined) return found;
+    // Deep link (chat citation) to a Document outside the current page: the
+    // panel fetches the full detail by id, so a placeholder carrying the id
+    // is enough to render it.
+    return {
+      id: detailId,
+      name: "",
+      ext: "",
+      size_bytes: 0,
+      status: "draft" as const,
+      owner: { id: "", name: "" },
+      progress: 0,
+      chunk_count: 0,
+      chunk_method: "naive",
+      retries_left: 0,
+      last_error: null,
+      created_at: "",
+      updated_at: "",
+    };
+  }, [detailId, items]);
 
   const runAction = async (document: DocumentItem, option: DocumentActionOption): Promise<void> => {
     setBusyDocId(document.id);

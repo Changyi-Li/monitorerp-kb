@@ -1,16 +1,31 @@
 // The core streaming logic: a pure, framework-agnostic transform that
 // consumes RagFlow agent SSE frames and emits the normalized event contract
-// (chatbot spec #23; this slice emits session/answer/done only — reasoning
-// and citations are dropped). Reasoning arrives inline as literal
-// <think>…</think> tags that may span multiple deltas (research #20); the
-// transform strips them statefully so the client never parses tags.
+// (chatbot spec #23; this slice adds citations — reasoning is still
+// dropped). Reasoning arrives inline as literal <think>…</think> tags that
+// may span multiple deltas (research #20); the transform strips them
+// statefully so the client never parses tags.
 //
 // The transform is deliberately DB- and HTTP-free: the route wires it to real
-// RagFlow SSE, and the unit test drives it with scripted frames.
+// RagFlow SSE and injects the citation→Document lookup, and the unit test
+// drives it with scripted frames.
+
+export interface ChatCitation {
+  /** Matches the [n] marker in the answer. */
+  n: number
+  /** The cited chunk passage — leads the source card. */
+  content: string
+  document_name: string
+  /** First page from positions, if any. */
+  page: number | null
+  ragflow_document_id: string
+  /** Our documents.id when the source is one of our Documents, else null. */
+  document_id: string | null
+}
 
 export type ChatTransformEvent =
   | { type: 'session'; id: string }
   | { type: 'answer'; delta: string }
+  | { type: 'references'; items: ChatCitation[] }
   | { type: 'done' }
   | { type: 'error'; code: 'upstream_error'; message: string }
 
@@ -18,6 +33,10 @@ export interface CompletionTransform {
   /** Feeds one complete SSE frame and returns the events it produced. */
   feed(frame: string): ChatTransformEvent[]
 }
+
+/** Maps a RagFlow document id to one of our Documents — the route injects a
+ * real lookup against `documents.ragflow_document_id`. */
+export type DocumentIdLookup = (ragflowDocumentId: string) => string | null
 
 const OPEN_TAG = '<think>'
 const CLOSE_TAG = '</think>'
@@ -45,12 +64,69 @@ function parseFrame(frame: string): ParsedFrame {
 interface FramePayload {
   code?: unknown
   message?: unknown
-  data?: { content?: unknown; session_id?: unknown }
+  data?: { content?: unknown; session_id?: unknown; reference?: unknown }
 }
 
-export function createCompletionTransform(options: { lazy: boolean }): CompletionTransform {
+/** First page from the positions arrays, if any ([page, x, y, w, h] each). */
+function firstPage(positions: unknown): number | null {
+  if (!Array.isArray(positions)) return null
+  const first = positions[0]
+  if (!Array.isArray(first)) return null
+  const page = first[0]
+  return typeof page === 'number' && Number.isFinite(page) ? page : null
+}
+
+/**
+ * Normalizes one raw citation (from either shape) into the contract shape.
+ * Items without a RagFlow document id are dropped — they could never map.
+ */
+function normalizeCitation(
+  raw: unknown,
+  n: number,
+  documentIdLookup: DocumentIdLookup,
+): ChatCitation | null {
+  // A non-numeric ordinal could never match a [n] marker in the answer.
+  if (!Number.isInteger(n) || n < 1) return null
+  if (raw === null || typeof raw !== 'object') return null
+  const item = raw as { content?: unknown; document_id?: unknown; document_name?: unknown; positions?: unknown }
+  if (typeof item.document_id !== 'string' || item.document_id === '') return null
+  return {
+    n,
+    content: typeof item.content === 'string' ? item.content : '',
+    document_name: typeof item.document_name === 'string' ? item.document_name : '',
+    page: firstPage(item.positions),
+    ragflow_document_id: item.document_id,
+    document_id: documentIdLookup(item.document_id),
+  }
+}
+
+/**
+ * Normalizes the TWO raw citation shapes (research #20) into the one contract
+ * shape: the live object `{chunks: {<ordinal>: …}}` from message_end, and the
+ * stored-history LIST of items (ordinals from list order).
+ */
+function normalizeReference(reference: unknown, documentIdLookup: DocumentIdLookup): ChatCitation[] {
+  if (reference === null || typeof reference !== 'object') return []
+  if (Array.isArray(reference)) {
+    return reference
+      .map((item, index) => normalizeCitation(item, index + 1, documentIdLookup))
+      .filter((c): c is ChatCitation => c !== null)
+  }
+  const chunks = (reference as { chunks?: unknown }).chunks
+  if (chunks === null || typeof chunks !== 'object' || Array.isArray(chunks)) return []
+  return Object.entries(chunks as Record<string, unknown>)
+    .map(([ordinal, item]) => normalizeCitation(item, Number(ordinal), documentIdLookup))
+    .filter((c): c is ChatCitation => c !== null)
+}
+
+export function createCompletionTransform(options: {
+  lazy: boolean
+  documentIdLookup?: DocumentIdLookup
+}): CompletionTransform {
+  const documentIdLookup: DocumentIdLookup = options.documentIdLookup ?? (() => null)
   let finished = false
   let sessionEmitted = false
+  let referencesEmitted = false
   let inThink = false
   // Split-tag lookahead: text that must not be emitted yet because a tag may
   // be cut mid-delta. Bounded by the tag lengths.
@@ -136,6 +212,15 @@ export function createCompletionTransform(options: { lazy: boolean }): Completio
     }
     if (typeof payload.data?.content === 'string') {
       out.push(...scanAnswer(payload.data.content))
+    }
+    // The message_end frame carries the citations (live chunks-object shape);
+    // the terminal references event is emitted once, before done.
+    if (!referencesEmitted) {
+      const items = normalizeReference(payload.data?.reference, documentIdLookup)
+      if (items.length > 0) {
+        referencesEmitted = true
+        out.push({ type: 'references', items })
+      }
     }
     return out
   }

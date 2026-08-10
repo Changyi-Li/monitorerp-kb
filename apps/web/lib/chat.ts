@@ -24,13 +24,25 @@ export function titleFromMessage(query: string): string {
   return trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed;
 }
 
-// --- The normalized SSE contract (spec #23). This slice of the feature
-// emits session/answer/done/error only; the client is a dumb renderer and
-// never parses <think> tags or citation shapes.
+// --- The normalized SSE contract (spec #23). The client is a dumb renderer
+// and never parses <think> tags or raw citation shapes.
+
+export interface ChatCitation {
+  /** Matches the [n] marker in the answer. */
+  n: number;
+  /** The cited chunk passage — leads the source card. */
+  content: string;
+  document_name: string;
+  page: number | null;
+  ragflow_document_id: string;
+  /** Our documents.id when the source is one of our Documents, else null. */
+  document_id: string | null;
+}
 
 export type ChatStreamEvent =
   | { type: "session"; id: string }
   | { type: "answer"; delta: string }
+  | { type: "references"; items: ChatCitation[] }
   | { type: "done" }
   | { type: "error"; code: string; message: string };
 
@@ -83,7 +95,7 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
     else if (line.startsWith("data:")) data = line.slice(5).trim();
   }
   if (data === null) return null;
-  let payload: { id?: string; delta?: string; code?: string; message?: string };
+  let payload: { id?: string; delta?: string; code?: string; message?: string; items?: unknown };
   try {
     payload = JSON.parse(data) as typeof payload;
   } catch {
@@ -94,6 +106,8 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
       return { type: "session", id: payload.id ?? "" };
     case "answer":
       return { type: "answer", delta: payload.delta ?? "" };
+    case "references":
+      return { type: "references", items: parseReferences(payload.items) };
     case "done":
       return { type: "done" };
     case "error":
@@ -105,4 +119,18 @@ function parseSseBlock(block: string): ChatStreamEvent | null {
     default:
       return null;
   }
+}
+
+function parseReferences(items: unknown): ChatCitation[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
+    .map((c) => ({
+      n: typeof c.n === "number" ? c.n : 0,
+      content: typeof c.content === "string" ? c.content : "",
+      document_name: typeof c.document_name === "string" ? c.document_name : "",
+      page: typeof c.page === "number" ? c.page : null,
+      ragflow_document_id: typeof c.ragflow_document_id === "string" ? c.ragflow_document_id : "",
+      document_id: typeof c.document_id === "string" ? c.document_id : null,
+    }));
 }

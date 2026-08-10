@@ -11,8 +11,8 @@ const message = (content: string, sessionId?: string): string => {
   return `event: message\ndata: ${JSON.stringify({ code: 0, data: frameData })}`
 }
 
-const messageEnd = (sessionId?: string): string => {
-  const frameData: Record<string, unknown> = { reference: { chunks: {} } }
+const messageEnd = (sessionId?: string, reference?: unknown): string => {
+  const frameData: Record<string, unknown> = { reference: reference ?? { chunks: {} } }
   if (sessionId !== undefined) frameData['session_id'] = sessionId
   return `event: message_end\ndata: ${JSON.stringify({ code: 0, data: frameData })}`
 }
@@ -152,6 +152,148 @@ describe('completion transform — errors', () => {
     expect(t.feed(rejected('Agent not found.'))).toEqual([
       { type: 'error', code: 'upstream_error', message: 'Agent not found.' },
     ])
+  })
+})
+
+// Citation fixtures per research #20: the LIVE shape is an object
+// `reference: {chunks: {<ordinal>: {content, document_id, document_name,
+// dataset_id, positions}}}` from message_end; the STORED-HISTORY shape is a
+// LIST of `{citation_id, content, document_id, document_name, id,
+// positions}` items.
+const LIVE_REFERENCE = {
+  chunks: {
+    '1': {
+      content: 'Leave is capped at 21 days per year.',
+      document_id: 'ragflow-doc-1',
+      document_name: 'Leave Policy.md',
+      dataset_id: 'ds',
+      positions: [[3, 0.1, 0.2, 0.8, 0.05]],
+    },
+    '2': {
+      content: 'It resets every calendar year.',
+      document_id: 'ragflow-doc-2',
+      document_name: 'Handbook.pdf',
+      dataset_id: 'ds',
+      positions: [],
+    },
+  },
+}
+
+const HISTORY_REFERENCE = [
+  {
+    citation_id: 'c1',
+    content: 'Submit the Purchase Arrivals form within two business days.',
+    document_id: 'ragflow-doc-1',
+    document_name: 'Leave Policy.md',
+    id: 'chunk-1',
+    positions: [[1, 0.0, 0.1, 0.5, 0.2]],
+  },
+  {
+    citation_id: 'c2',
+    content: 'Late submissions require written approval.',
+    document_id: 'ragflow-doc-2',
+    document_name: 'Handbook.pdf',
+    id: 'chunk-2',
+    positions: [],
+  },
+]
+
+/** Maps 'ragflow-doc-1' to a managed document; everything else is external. */
+const fakeLookup = (ragflowDocumentId: string): string | null =>
+  ragflowDocumentId === 'ragflow-doc-1' ? 'our-doc-1' : null
+
+describe('completion transform — citations', () => {
+  it('normalizes the live chunks-object shape and maps document ids via the lookup', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    expect(t.feed(messageEnd(undefined, LIVE_REFERENCE))).toEqual([
+      {
+        type: 'references',
+        items: [
+          {
+            n: 1,
+            content: 'Leave is capped at 21 days per year.',
+            document_name: 'Leave Policy.md',
+            page: 3,
+            ragflow_document_id: 'ragflow-doc-1',
+            document_id: 'our-doc-1',
+          },
+          {
+            n: 2,
+            content: 'It resets every calendar year.',
+            document_name: 'Handbook.pdf',
+            page: null,
+            ragflow_document_id: 'ragflow-doc-2',
+            document_id: null,
+          },
+        ],
+      },
+    ])
+  })
+
+  it('normalizes the stored-history list shape with 1-based ordinals', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    expect(t.feed(messageEnd(undefined, HISTORY_REFERENCE))).toEqual([
+      {
+        type: 'references',
+        items: [
+          {
+            n: 1,
+            content: 'Submit the Purchase Arrivals form within two business days.',
+            document_name: 'Leave Policy.md',
+            page: 1,
+            ragflow_document_id: 'ragflow-doc-1',
+            document_id: 'our-doc-1',
+          },
+          {
+            n: 2,
+            content: 'Late submissions require written approval.',
+            document_name: 'Handbook.pdf',
+            page: null,
+            ragflow_document_id: 'ragflow-doc-2',
+            document_id: null,
+          },
+        ],
+      },
+    ])
+  })
+
+  it('does not resolve document ids without an injected lookup', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = t.feed(messageEnd(undefined, LIVE_REFERENCE))
+    const items = events[0]?.type === 'references' ? events[0].items : []
+    expect(items.map((c) => c.document_id)).toEqual([null, null])
+  })
+
+  it('skips citation items without a document id', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    const reference = {
+      chunks: {
+        '1': { content: 'kept', document_id: 'ragflow-doc-1', document_name: 'A.md', positions: [] },
+        '2': { content: 'dropped — no document_id', document_name: 'B.md', positions: [] },
+      },
+    }
+    const events = t.feed(messageEnd(undefined, reference))
+    expect(events).toEqual([
+      { type: 'references', items: [expect.objectContaining({ n: 1, document_id: 'our-doc-1' })] },
+    ])
+  })
+
+  it('emits no references event for an absent or empty reference', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    expect(t.feed(messageEnd())).toEqual([])
+    expect(t.feed(messageEnd(undefined, { chunks: {} }))).toEqual([])
+    expect(t.feed(messageEnd(undefined, null))).toEqual([])
+  })
+
+  it('emits references once, after the answer and before done', () => {
+    const t = createCompletionTransform({ lazy: false, documentIdLookup: fakeLookup })
+    const events = [
+      ...t.feed(message('The policy [1].')),
+      ...t.feed(messageEnd(undefined, LIVE_REFERENCE)),
+      ...t.feed(messageEnd(undefined, LIVE_REFERENCE)), // a second message_end is ignored
+      ...t.feed(doneFrame()),
+    ]
+    expect(events.map((e) => e.type)).toEqual(['answer', 'references', 'done'])
   })
 })
 

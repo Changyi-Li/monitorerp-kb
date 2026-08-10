@@ -3,7 +3,7 @@ import type { Hono } from 'hono'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { SESSION_COOKIE_NAME } from '../src/auth/jwt.js'
 import type { DB } from '../src/db/client.js'
-import { chatSessions, users } from '../src/db/schema.js'
+import { chatSessions, documents, users } from '../src/db/schema.js'
 import { createTestDatabase, makeApp, TEST_CONFIG, truncateAll, type TestDatabase } from './helpers.js'
 import { startRagflowStub, type RagflowStub } from './ragflow-stub.js'
 
@@ -57,7 +57,7 @@ const cookieHeader = (cookie: string): { cookie: string } => ({ cookie: `${SESSI
 
 interface SseEvent {
   event: string
-  data: { id?: string; delta?: string; code?: string }
+  data: { id?: string; delta?: string; code?: string; items?: unknown }
 }
 
 /** Joins every answer delta — the stub streams the answer in word-level deltas. */
@@ -68,11 +68,11 @@ function answerText(events: SseEvent[]): string {
     .join('')
 }
 
-/** Asserts the canonical session → answer… → done event order. */
+/** Asserts the canonical session → answer… → references → done event order. */
 function expectStreamShape(events: SseEvent[]): void {
   expect(events[0]?.event).toBe('session')
   expect(events.at(-1)?.event).toBe('done')
-  expect(events.slice(1, -1).every((e) => e.event === 'answer')).toBe(true)
+  expect(events.slice(1, -1).every((e) => e.event === 'answer' || e.event === 'references')).toBe(true)
 }
 
 /** Consumes the whole SSE body and parses it into events. */
@@ -125,7 +125,7 @@ describe('POST /chat/completions', () => {
     expect(sessionId).toBeTypeOf('string')
     // The stub's scripted stream splits the <think> tags across deltas; the
     // proxy strips them — only the answer reaches the client.
-    expect(answerText(events)).toBe('Leave is capped at 21 days per year. It resets every calendar year.')
+    expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
 
     // The stub saw a lazy request (no session_id) and auto-created one.
     expect(stub.completionRequests).toHaveLength(1)
@@ -150,8 +150,8 @@ describe('POST /chat/completions', () => {
     const events = await sseOf(await completions(cookie, { session_id: sessionId, query: 'Follow up?' }))
     expect(events[0]?.event).toBe('answer')
     expect(events.at(-1)?.event).toBe('done')
-    expect(events.slice(0, -1).every((e) => e.event === 'answer')).toBe(true)
-    expect(answerText(events)).toBe('Leave is capped at 21 days per year. It resets every calendar year.')
+    expect(events.slice(0, -1).every((e) => e.event === 'answer' || e.event === 'references')).toBe(true)
+    expect(answerText(events)).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
 
     // The proxy sent the RagFlow session id this time, not a lazy request.
     expect(stub.completionRequests).toHaveLength(2)
@@ -195,6 +195,50 @@ describe('POST /chat/completions', () => {
     const res = await completions(cookie, { query: 'hi' })
     expect(res.status).toBe(502)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('upstream_error')
+  })
+
+  it('maps streamed references to our Documents via ragflow_document_id', async () => {
+    const cookie = await activeMemberCookie()
+    const [member] = await db.select({ id: users.id }).from(users).where(eq(users.email, MEMBER.email)).limit(1)
+    expect(member).toBeDefined()
+    // The stub's scripted citation 1 references 'stub-doc-1' — seed the
+    // Document it maps to; citation 2 stays external.
+    const [seeded] = await db
+      .insert(documents)
+      .values({
+        name: 'Leave Policy.md',
+        ext: 'md',
+        sizeBytes: 12,
+        ragflowDocumentId: 'stub-doc-1',
+        chunkMethod: 'naive',
+        status: 'draft',
+        ownerId: member!.id,
+      })
+      .returning({ id: documents.id })
+    expect(seeded).toBeDefined()
+
+    const events = await sseOf(await completions(cookie, { query: 'Leave days?' }))
+    const refs = events.find((e) => e.event === 'references')
+    expect(refs?.data.items).toEqual([
+      {
+        n: 1,
+        content: 'Leave is capped at 21 days per year.',
+        document_name: 'Leave Policy.md',
+        page: 3,
+        ragflow_document_id: 'stub-doc-1',
+        document_id: seeded!.id,
+      },
+      {
+        n: 2,
+        content: 'It resets every calendar year.',
+        document_name: 'External Handbook.pdf',
+        page: null,
+        ragflow_document_id: 'stub-external-doc',
+        document_id: null,
+      },
+    ])
+    // The references event is terminal: done still closes the stream.
+    expect(events.at(-1)?.event).toBe('done')
   })
 
   it('requires a session', async () => {

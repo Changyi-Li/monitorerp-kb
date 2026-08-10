@@ -60,8 +60,8 @@ export interface RagflowStub {
 // The scripted agent completion stream: `<think>` tags SPLIT across deltas
 // (the open tag is cut by the first frame boundary, the close tag by the
 // last) so the API e2e proves the transform's tag handling end-to-end, a
-// message_end with a live-shape reference the transform drops this slice,
-// and the answer in word-level deltas so the web e2e can observe the answer
+// message_end with a live-shape reference carrying inline [n] markers, and
+// the answer in word-level deltas so the web e2e can observe the answer
 // streaming in incrementally.
 const COMPLETION_DELTAS = [
   '<thi',
@@ -69,20 +69,35 @@ const COMPLETION_DELTAS = [
   'ink>Leave',
   ' is capped',
   ' at 21 days',
-  ' per year.',
+  ' per year',
+  ' [1].',
   ' It resets',
   ' every',
-  ' calendar year.',
+  ' calendar year',
+  ' [2].',
 ]
+
+// The document name/id pair from the scripted reference. Uploads with this
+// name get this id, so a web-e2e upload becomes the Document the citation
+// maps to (issue #25).
+export const REFERENCE_DOCUMENT_NAME = 'Leave Policy.md'
+export const REFERENCE_DOCUMENT_ID = 'stub-doc-1'
 
 const COMPLETION_REFERENCE = {
   chunks: {
     '1': {
       content: 'Leave is capped at 21 days per year.',
-      document_id: 'stub-doc-1',
-      document_name: 'Leave Policy.md',
+      document_id: REFERENCE_DOCUMENT_ID,
+      document_name: REFERENCE_DOCUMENT_NAME,
       dataset_id: 'stub-dataset',
       positions: [[3, 0.1, 0.2, 0.8, 0.05]],
+    },
+    '2': {
+      content: 'It resets every calendar year.',
+      document_id: 'stub-external-doc',
+      document_name: 'External Handbook.pdf',
+      dataset_id: 'stub-dataset',
+      positions: [],
     },
   },
 }
@@ -276,7 +291,9 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const parsed = await parseUpload(req)
       if (parsed === null) return fail(400, 'missing file')
       const stored: StoredUpload = {
-        id: randomUUID(),
+        // The upload of the reference's document gets its id deterministically,
+        // so a web-e2e upload maps to the streamed citation (issue #25).
+        id: parsed.name === REFERENCE_DOCUMENT_NAME ? REFERENCE_DOCUMENT_ID : randomUUID(),
         name: parsed.name,
         sizeBytes: parsed.content.length,
         content: parsed.content,
