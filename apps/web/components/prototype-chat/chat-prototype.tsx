@@ -1,17 +1,16 @@
 "use client";
 
-// PROTOTYPE root — mounts one of the three chat variants based on ?variant= and
-// renders the floating switcher. Lives inside the real AppShell (real auth) so
-// the variants butt against the actual app nav.
+// PROTOTYPE root — mounts one of the two chat variants based on ?variant= and
+// renders the floating switcher. Lives inside a mock shell (real auth not
+// required) so the variants are viewable without the backend.
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect } from "react";
 
+import { PROTOTYPE_VARIANTS, type VariantKey } from "@/components/prototype-chat/shared";
 import { VariantA } from "@/components/prototype-chat/variant-a";
 import { VariantB } from "@/components/prototype-chat/variant-b";
-import { VariantC } from "@/components/prototype-chat/variant-c";
-import { PROTOTYPE_VARIANTS, type VariantKey } from "@/components/prototype-chat/shared";
 
 const KEYS = PROTOTYPE_VARIANTS.map((v) => v.key);
 
@@ -59,9 +58,10 @@ export function ChatPrototype() {
       <div className="relative min-h-0 flex-1">
         {current === "A" && <VariantA />}
         {current === "B" && <VariantB />}
-        {current === "C" && <VariantC />}
       </div>
-      {process.env.NODE_ENV !== "production" && <PrototypeSwitcher current={current} onPrev={() => cycle(-1)} onNext={() => cycle(1)} />}
+      {process.env.NODE_ENV !== "production" && (
+        <PrototypeSwitcher current={current} onPrev={() => cycle(-1)} onNext={() => cycle(1)} />
+      )}
     </div>
   );
 }
@@ -87,7 +87,7 @@ function PrototypeSwitcher({
         >
           <ChevronLeft className="size-4" aria-hidden />
         </button>
-        <span className="min-w-[12rem] text-center text-xs font-medium tabular-nums">
+        <span className="min-w-[11rem] text-center text-xs font-medium tabular-nums">
           <span className="text-foreground">{current}</span>
           <span className="text-muted-foreground"> — {active?.name}</span>
         </span>

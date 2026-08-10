@@ -182,9 +182,8 @@ const DEMO_REPLY = {
 };
 
 export const PROTOTYPE_VARIANTS = [
-  { key: "A", name: "Two-pane · session sidebar" },
-  { key: "B", name: "Thread-first · history drawer" },
-  { key: "C", name: "Citations rail" },
+  { key: "A", name: "With Sources list" },
+  { key: "B", name: "No Sources list" },
 ] as const;
 
 export type VariantKey = (typeof PROTOTYPE_VARIANTS)[number]["key"];
@@ -521,12 +520,15 @@ export function SourcesPanel({ citations, highlight }: { citations?: ChatCitatio
 export function MessageBubble({
   message,
   onCite,
+  showSources = true,
 }: {
   message: ChatMessage;
   onCite: (ordinal: number) => void;
+  showSources?: boolean;
 }) {
   // Clicking an inline [n] chip toggles a collapsible peek of that one source
-  // directly under the answer. The full Sources list still renders below it.
+  // directly under the answer. The Sources list below is optional (variant A
+  // shows it; variant B hides it and relies on the chip-click peek alone).
   const [focused, setFocused] = useState<number | null>(null);
 
   if (message.role === "user") {
@@ -565,7 +567,7 @@ export function MessageBubble({
           </div>
         )}
 
-        <SourcesPanel citations={message.citations} highlight={focused ?? undefined} />
+        {showSources && <SourcesPanel citations={message.citations} highlight={focused ?? undefined} />}
       </div>
     </div>
   );
