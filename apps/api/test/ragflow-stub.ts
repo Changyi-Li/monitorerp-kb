@@ -75,27 +75,23 @@ export interface RagflowStub {
  * sweeper transitions by mutating the stub's run state, then assert through
  * the API.
  */
-// The scripted agent completion stream: `<think>` tags SPLIT across deltas
-// (the open tag is cut by the first frame boundary, the close tag by the
-// last) so the API e2e proves the transform's tag handling end-to-end, a
-// message_end with a live-shape reference carrying inline [ID:n] citation
+// The scripted agent completion stream mirrors the REAL wire (issue #32):
+// reasoning is gated by `start_to_think`/`end_to_think` flags on `message`
+// frames — a leading empty flag frame, then reasoning deltas, then a closing
+// flag — NOT by <think> tags (those appear only in STORED history, see
+// STUB_ASSISTANT_CONTENT). The answer carries the agent's [ID:n] citation
 // markers (issue #30 — the real agent cites [ID:<chunk key>], not [n]
 // ordinals), one marker split across deltas so the streaming rewrite is
-// exercised, and the answer in word-level deltas so the web e2e can observe
-// the answer streaming in incrementally.
-const COMPLETION_DELTAS = [
-  '<thi',
-  'nk>The user asks about the leave policy. The policy states 21 days per year.\n</th',
-  'ink>Leave',
-  ' is capped',
-  ' at 21 days',
-  ' per year',
-  ' [ID:',
-  '19].',
-  ' It resets',
-  ' every',
-  ' calendar year',
-  ' [ID:41].',
+// exercised, and word-level answer deltas so the web e2e can observe the
+// answer streaming in incrementally.
+const COMPLETION_DELTAS: ReadonlyArray<Record<string, unknown>> = [
+  { content: '', start_to_think: true },
+  { content: 'The user asks about the leave policy.' },
+  { content: ' The policy states 21 days per year.\n' },
+  { content: '', end_to_think: true },
+  { content: 'Leave is capped at 21 days per year [ID:' },
+  { content: '19].' },
+  { content: ' It resets every calendar year [ID:41].' },
 ]
 
 // The document name/id pair from the scripted reference. Uploads with this
@@ -273,8 +269,8 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     // Frames are a single `data:` line with {event, message_id, task_id,
     // data, session_id} — success frames have NO `code` field (the old
     // scripted `{code: 0, data: ...}` envelope was the dataset API's, and it
-    // masked bug #29). The stream is scripted to include <think> tags split
-    // across deltas and a message_end reference.
+    // masked bug #29). The stream is scripted with start_to_think/end_to_think
+    // flag-gated reasoning and a message_end reference (issue #32).
     if (url.pathname === '/api/v1/agents/chat/completions' && req.method === 'POST') {
       if (stub.failCompletions) return fail(500, 'simulated completion failure')
       const body = JSON.parse((await readBody(req)) || '{}') as {
@@ -298,8 +294,8 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       agentSessions.set(streamedSessionId, session)
 
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-      for (const delta of COMPLETION_DELTAS) {
-        res.write(`${realCompletionFrame('message', { content: delta }, streamedSessionId)}\n\n`)
+      for (const data of COMPLETION_DELTAS) {
+        res.write(`${realCompletionFrame('message', data, streamedSessionId)}\n\n`)
         await sleep(COMPLETION_FRAME_DELAY_MS)
       }
       res.write(`${realCompletionFrame('message_end', { reference: COMPLETION_REFERENCE }, streamedSessionId)}\n\n`)

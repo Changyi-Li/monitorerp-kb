@@ -24,6 +24,19 @@ const nodeFinished = (sessionId = 'session-1'): string => realCompletionFrame('n
 
 const doneFrame = (): string => 'data: [DONE]'
 
+// Real RagFlow agent reasoning delimiters (issue #32): reasoning in the stream
+// is gated by boolean flags on `message` frames — a leading
+// {"content":"","start_to_think":true}, then reasoning tokens, then
+// {"content":"","end_to_think":true} — NOT by <think> tags. Component-level
+// reasoning also arrives in a `node_started`/`node_finished` frame's
+// `data.thoughts`. Captured live 2026-08-10.
+const thinkStart = (sessionId = 'session-1'): string =>
+  realCompletionFrame('message', { content: '', start_to_think: true }, sessionId)
+const thinkEnd = (sessionId = 'session-1'): string =>
+  realCompletionFrame('message', { content: '', end_to_think: true }, sessionId)
+const nodeThoughts = (thoughts: string, sessionId = 'session-1'): string =>
+  realCompletionFrame('node_started', { thoughts }, sessionId)
+
 // Rejections carry a numeric non-zero `code` with a string `message` (real
 // RagFlow error bodies, e.g. {"code":103,"message":"..."}).
 const rejected = (messageText: string): string =>
@@ -33,87 +46,142 @@ const rejected = (messageText: string): string =>
 const allEvents = (transform: { feed: (f: string) => ChatTransformEvent[] }, frames: string[]): ChatTransformEvent[] =>
   frames.flatMap((f) => transform.feed(f))
 
-/** Joins every thinking delta — the tag-hold fragments chunk them unevenly. */
+/** Joins every thinking delta — reasoning arrives in per-frame chunks. */
 const thinkingText = (events: ChatTransformEvent[]): string =>
   events
     .filter((e): e is Extract<ChatTransformEvent, { type: 'thinking' }> => e.type === 'thinking')
     .map((e) => e.delta)
     .join('')
 
-/** Joins every answer delta — the tag-hold fragments chunk them unevenly. */
+/** Joins every answer delta — the [ID:n] marker hold splits some deltas. */
 const answerText = (events: ChatTransformEvent[]): string =>
   events
     .filter((e): e is Extract<ChatTransformEvent, { type: 'answer' }> => e.type === 'answer')
     .map((e) => e.delta)
     .join('')
 
-describe('completion transform — thinking vs answer', () => {
-  it('emits a thinking delta for the <think> block and an answer delta for the rest', () => {
-    const t = createCompletionTransform({ lazy: false })
-    expect(t.feed(message('<think>Reasoning here.</think>The leave policy allows 21 days.'))).toEqual([
-      { type: 'thinking', delta: 'Reasoning here.' },
-      { type: 'answer', delta: 'The leave policy allows 21 days.' },
-    ])
-  })
-
-  it('emits thinking deltas for the thinking phase and answer deltas for the rest', () => {
-    const t = createCompletionTransform({ lazy: false })
-    const events = allEvents(t, [
-      message('<think>Step one'),
-      message(' two.'),
-      message('</think>Here is the'),
-      message(' answer.'),
-    ])
-    expect(answerText(events)).toBe('Here is the answer.')
-    expect(thinkingText(events)).toBe('Step one two.')
-  })
-
-  it('handles an open tag split across deltas, thinking and answer both intact', () => {
-    const t = createCompletionTransform({ lazy: false })
-    const events = allEvents(t, [
-      message('Answer starts. <thi'),
-      message('nk>hidden reasoning'),
-      message('</think>'),
-      message(' visible answer'),
-    ])
-    expect(answerText(events)).toBe('Answer starts.  visible answer')
-    expect(thinkingText(events)).toBe('hidden reasoning')
-  })
-
-  it('handles a close tag split across deltas', () => {
-    const t = createCompletionTransform({ lazy: false })
-    const events = allEvents(t, [message('<think>reasoning text</thi'), message('nk>Answer text.')])
-    expect(thinkingText(events)).toBe('reasoning text')
-    expect(answerText(events)).toBe('Answer text.')
-  })
-
-  it('interleaves multiple think blocks within one delta', () => {
-    const t = createCompletionTransform({ lazy: false })
-    expect(t.feed(message('<think>a</think>One<think>b</think>Two'))).toEqual([
-      { type: 'thinking', delta: 'a' },
-      { type: 'answer', delta: 'One' },
-      { type: 'thinking', delta: 'b' },
-      { type: 'answer', delta: 'Two' },
-    ])
-  })
-
-  it('does not leak a trailing open-tag fragment into the answer', () => {
-    const t = createCompletionTransform({ lazy: false })
-    // '<thi' is a split open tag; the stream dies before it completes. Only
-    // the fragment is held — the text before it is answer.
-    expect(t.feed(message('partial answer<x<thi'))).toEqual([{ type: 'answer', delta: 'partial answer<x' }])
-    // A frame that could not complete the tag (e.g. [DONE]) drops the fragment.
-    expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
-  })
-
-  it('emits answer text immediately when no tag fragment is pending', () => {
+describe('completion transform — answer content', () => {
+  it('emits answer text immediately when there is no reasoning', () => {
     const t = createCompletionTransform({ lazy: false })
     expect(t.feed(message('plain tail'))).toEqual([{ type: 'answer', delta: 'plain tail' }])
   })
 
-  it('does not hold back a literal "<" that is not a tag start', () => {
+  it('treats a literal "<" as plain answer text', () => {
+    // The stream delimits reasoning with start_to_think flags (issue #32), so
+    // scanAnswer no longer parses tags — a "<" is never special.
     const t = createCompletionTransform({ lazy: false })
     expect(t.feed(message('x < 3 and y < 2'))).toEqual([{ type: 'answer', delta: 'x < 3 and y < 2' }])
+  })
+})
+
+describe('completion transform — reasoning via start_to_think/end_to_think (real wire, issue #32)', () => {
+  it('routes message content between the flags to thinking, the rest to answer', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [thinkStart(), message('Reasoning here.'), thinkEnd(), message('The leave policy allows 21 days.')])
+    expect(thinkingText(events)).toBe('Reasoning here.')
+    expect(answerText(events)).toBe('The leave policy allows 21 days.')
+  })
+
+  it('streams reasoning deltas token by token across many message frames', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [
+      thinkStart(),
+      message('Step one'),
+      message(' two.'),
+      message(' Done.'),
+      thinkEnd(),
+      message('Here is the'),
+      message(' answer.'),
+    ])
+    expect(thinkingText(events)).toBe('Step one two. Done.')
+    expect(answerText(events)).toBe('Here is the answer.')
+  })
+
+  it('treats content before any flag as answer (a stream that never thinks)', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [message('Plain answer, no reasoning.')])
+    expect(answerText(events)).toBe('Plain answer, no reasoning.')
+    expect(thinkingText(events)).toBe('')
+  })
+
+  it("surfaces a node frame's non-empty thoughts as a thinking delta before the stream", () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [
+      nodeThoughts('⌛Give me a moment — starting from: the user query.'),
+      thinkStart(),
+      message('Reasoning.'),
+      thinkEnd(),
+      message('Answer.'),
+    ])
+    // Component-level thoughts lead, then the streamed reasoning.
+    expect(thinkingText(events)).toBe('⌛Give me a moment — starting from: the user query.Reasoning.')
+    expect(answerText(events)).toBe('Answer.')
+  })
+
+  it('ignores empty thoughts fields', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [nodeThoughts(''), message('Answer.')])
+    expect(thinkingText(events)).toBe('')
+    expect(answerText(events)).toBe('Answer.')
+  })
+
+  it('does not rewrite [ID:n] citation markers inside reasoning', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [
+      thinkStart(),
+      message('Consider [ID:19] as a candidate.'),
+      thinkEnd(),
+      message('Answer [ID:19].'),
+    ])
+    // Reasoning is emitted raw — markers are NOT rewritten inside thinking.
+    expect(thinkingText(events)).toBe('Consider [ID:19] as a candidate.')
+    expect(answerText(events)).toBe('Answer [19].')
+  })
+
+  it('still rewrites [ID:n] markers in the answer after reasoning ends', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [thinkStart(), message('thinking'), thinkEnd(), message('Leave is capped at 21 days [ID:19].')])
+    expect(answerText(events)).toBe('Leave is capped at 21 days [19].')
+  })
+
+  it('emits a session event from a reasoning stream in lazy mode', () => {
+    const t = createCompletionTransform({ lazy: true })
+    const events = allEvents(t, [
+      thinkStart('ragflow-session-7'),
+      message('thinking', 'ragflow-session-7'),
+      thinkEnd('ragflow-session-7'),
+      message('answer', 'ragflow-session-7'),
+      doneFrame(),
+    ])
+    expect(events.filter((e) => e.type !== 'thinking').map((e) => e.type)).toEqual([
+      'session',
+      'answer',
+      'done',
+    ])
+    expect(thinkingText(events)).toBe('thinking')
+  })
+
+  it('replays the real captured "hi" stream: thoughts → reasoning → answer → done', () => {
+    const t = createCompletionTransform({ lazy: false })
+    const events = allEvents(t, [
+      realCompletionFrame('workflow_started', { inputs: {} }, 'session-1'),
+      realCompletionFrame('node_started', { thoughts: '' }, 'session-1'),
+      realCompletionFrame('node_finished', { outputs: {} }, 'session-1'),
+      nodeThoughts('⌛Give me a moment—starting from: \n\nThe user query is hi.', 'session-1'),
+      realCompletionFrame('node_started', { thoughts: '' }, 'session-1'),
+      thinkStart('session-1'),
+      message('The'),
+      message(' user'),
+      message(' is just greeting me.'),
+      thinkEnd('session-1'),
+      message('## Answer\n\nHello!'),
+      realCompletionFrame('message_end', { attachment: {} }, 'session-1'),
+      realCompletionFrame('workflow_finished', { outputs: {} }, 'session-1'),
+      doneFrame(),
+    ])
+    expect(events.filter((e) => e.type !== 'thinking').map((e) => e.type)).toEqual(['answer', 'done'])
+    expect(thinkingText(events)).toBe('⌛Give me a moment—starting from: \n\nThe user query is hi.The user is just greeting me.')
+    expect(answerText(events)).toBe('## Answer\n\nHello!')
   })
 })
 
@@ -145,11 +213,11 @@ describe('completion transform — events', () => {
     expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
   })
 
-  it('emits the held thinking fragment when the stream ends mid-thinking', () => {
+  it('keeps all reasoning when the stream ends before end_to_think', () => {
     const t = createCompletionTransform({ lazy: false })
-    // The close tag never arrives; the held reasoning fragment must not be
-    // truncated from the reconstructed thinking.
-    const events = allEvents(t, [message('<think>thinking text'), doneFrame()])
+    // end_to_think never arrives — reasoning is emitted as it streams, so
+    // nothing is truncated from the reconstructed thinking (issue #32).
+    const events = allEvents(t, [thinkStart(), message('thinking text'), doneFrame()])
     expect(thinkingText(events)).toBe('thinking text')
     expect(events.at(-1)).toEqual({ type: 'done' })
   })
@@ -424,13 +492,6 @@ describe('completion transform — [ID:n] marker rewriting (issue #30)', () => {
     expect(t.feed(message('Tail cut mid-marker [ID:4'))).toEqual([{ type: 'answer', delta: 'Tail cut mid-marker ' }])
     expect(t.feed(doneFrame())).toEqual([{ type: 'done' }])
   })
-
-  it('does not rewrite markers inside <think> reasoning', () => {
-    const t = createCompletionTransform({ lazy: false })
-    const events = allEvents(t, [message('<think>Consider [ID:19] as a candidate</think>Answer [ID:19].')])
-    expect(thinkingText(events)).toBe('Consider [ID:19] as a candidate')
-    expect(answerText(events)).toBe('Answer [19].')
-  })
 })
 
 describe('normalizeAnswerMarkers — stored-history content (issue #30)', () => {
@@ -467,11 +528,14 @@ describe('splitThinking — stored history content', () => {
 })
 
 describe('completion transform — full stream shape', () => {
-  it('emits session → answer deltas → done for a scripted lazy stream', () => {
+  it('emits session → thinking → answer → done for a scripted lazy stream', () => {
     const t = createCompletionTransform({ lazy: true })
     const frames = [
-      message('<think>The user asks', 'ragflow-session-9'),
-      message(' about leave policy.</think>Leave is capped at 21 days per year [ID:19].'),
+      thinkStart('ragflow-session-9'),
+      message('The user asks', 'ragflow-session-9'),
+      message(' about leave policy.', 'ragflow-session-9'),
+      thinkEnd('ragflow-session-9'),
+      message('Leave is capped at 21 days per year [ID:19].', 'ragflow-session-9'),
       messageEnd('ragflow-session-9'),
       nodeFinished(),
       doneFrame(),
