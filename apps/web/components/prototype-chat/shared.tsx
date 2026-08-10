@@ -7,7 +7,7 @@
 // references), not RagFlow's raw wire format, since the proxy normalizes both
 // the inline <think> tags and the two citation shapes (research #20).
 
-import { ChevronDown, ExternalLink, Send, Sparkles } from "lucide-react";
+import { ChevronDown, ExternalLink, Send, Sparkles, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -471,8 +471,11 @@ export function MessageBubble({
   message: ChatMessage;
   onCite: (ordinal: number) => void;
 }) {
-  const isUser = message.role === "user";
-  if (isUser) {
+  // Clicking an inline [n] chip toggles a collapsible peek of that one source
+  // directly under the answer. The full Sources list still renders below it.
+  const [focused, setFocused] = useState<number | null>(null);
+
+  if (message.role === "user") {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary px-3.5 py-2 text-sm text-primary-foreground">
@@ -481,6 +484,13 @@ export function MessageBubble({
       </div>
     );
   }
+
+  const handleCite = (n: number) => {
+    setFocused((cur) => (cur === n ? null : n));
+    onCite(n);
+  };
+  const focusedCitation = message.citations?.find((c) => c.ordinal === focused);
+
   return (
     <div className="flex gap-3">
       <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -489,12 +499,32 @@ export function MessageBubble({
       <div className="min-w-0 flex-1">
         <ThinkingPane thinking={message.thinking} streaming={message.streaming} />
         <div className="text-sm leading-relaxed">
-          <AnswerWithCitations content={message.content} citations={message.citations} onCite={onCite} />
+          <AnswerWithCitations content={message.content} citations={message.citations} onCite={handleCite} />
           {message.streaming && message.content !== "" && (
             <span className="ml-0.5 inline-block h-3.5 w-0.5 translate-y-0.5 bg-foreground/70 motion-safe:animate-pulse" aria-hidden />
           )}
         </div>
-        <SourcesPanel citations={message.citations} />
+
+        {focusedCitation !== undefined && (
+          <div className="mt-3 overflow-hidden rounded-lg border border-primary/30 bg-primary/5">
+            <div className="flex items-center justify-between px-3 py-1.5 text-xs font-medium text-muted-foreground">
+              <span>Cited source {focusedCitation.ordinal}</span>
+              <button
+                type="button"
+                onClick={() => setFocused(null)}
+                aria-label="Collapse cited source"
+                className="-mr-1 rounded p-1 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </div>
+            <div className="px-2 pb-2">
+              <CitationCard citation={focusedCitation} highlighted />
+            </div>
+          </div>
+        )}
+
+        <SourcesPanel citations={message.citations} highlight={focused ?? undefined} />
       </div>
     </div>
   );
