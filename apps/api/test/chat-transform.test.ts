@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createCompletionTransform, type ChatTransformEvent } from '../src/chat/transform.js'
+import { createCompletionTransform, splitThinking, type ChatTransformEvent } from '../src/chat/transform.js'
 
 // RagFlow agent SSE frames (research #20 wire shape): `event:` + `data:`
 // lines; the stream ends with `data: [DONE]`. These builders script the
@@ -329,6 +329,27 @@ describe('completion transform — citations', () => {
       ...t.feed(doneFrame()),
     ]
     expect(events.map((e) => e.type)).toEqual(['answer', 'references', 'done'])
+  })
+})
+
+describe('splitThinking — stored history content', () => {
+  it('splits a complete think block from the answer', () => {
+    expect(splitThinking('<think>Reasoning here.</think>The answer.')).toEqual({
+      thinking: 'Reasoning here.',
+      answer: 'The answer.',
+    })
+  })
+
+  it('concatenates multiple think blocks', () => {
+    expect(splitThinking('<think>a</think>One<think>b</think>Two')).toEqual({ thinking: 'ab', answer: 'OneTwo' })
+  })
+
+  it('counts an unclosed think block as reasoning', () => {
+    expect(splitThinking('Lead<think>unclosed')).toEqual({ thinking: 'unclosed', answer: 'Lead' })
+  })
+
+  it('leaves content without think tags untouched', () => {
+    expect(splitThinking('Plain answer.')).toEqual({ thinking: '', answer: 'Plain answer.' })
   })
 })
 

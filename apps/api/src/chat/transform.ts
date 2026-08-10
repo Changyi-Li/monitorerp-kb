@@ -106,7 +106,7 @@ function normalizeCitation(
  * shape: the live object `{chunks: {<ordinal>: …}}` from message_end, and the
  * stored-history LIST of items (ordinals from list order).
  */
-function normalizeReference(reference: unknown, documentIdLookup: DocumentIdLookup): ChatCitation[] {
+export function normalizeReference(reference: unknown, documentIdLookup: DocumentIdLookup): ChatCitation[] {
   if (reference === null || typeof reference !== 'object') return []
   if (Array.isArray(reference)) {
     return reference
@@ -118,6 +118,41 @@ function normalizeReference(reference: unknown, documentIdLookup: DocumentIdLook
   return Object.entries(chunks as Record<string, unknown>)
     .map(([ordinal, item]) => normalizeCitation(item, Number(ordinal), documentIdLookup))
     .filter((c): c is ChatCitation => c !== null)
+}
+
+/**
+ * Splits a COMPLETE stored content string into reasoning and answer — the
+ * streaming transform's scanAnswer handles deltas with split-tag holds; a
+ * stored message is whole, so a straightforward scan suffices. Multiple
+ * think blocks concatenate; an unclosed block counts as reasoning.
+ */
+export function splitThinking(content: string): { thinking: string; answer: string } {
+  let thinking = ''
+  let answer = ''
+  let rest = content
+  let inThink = false
+  while (rest.length > 0) {
+    if (inThink) {
+      const close = rest.indexOf(CLOSE_TAG)
+      if (close === -1) {
+        thinking += rest
+        break
+      }
+      thinking += rest.slice(0, close)
+      rest = rest.slice(close + CLOSE_TAG.length)
+      inThink = false
+    } else {
+      const open = rest.indexOf(OPEN_TAG)
+      if (open === -1) {
+        answer += rest
+        break
+      }
+      answer += rest.slice(0, open)
+      rest = rest.slice(open + OPEN_TAG.length)
+      inThink = true
+    }
+  }
+  return { thinking, answer }
 }
 
 export function createCompletionTransform(options: {

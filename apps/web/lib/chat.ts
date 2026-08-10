@@ -18,6 +18,32 @@ export function listChatSessions(): Promise<ApiResult<ChatSessionListResult>> {
   return apiJson<ChatSessionListResult>("/api/chat/sessions");
 }
 
+/** One stored-history message, normalized by the API (spec #23). */
+export interface HistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+  thinking?: string;
+  references?: ChatCitation[];
+}
+
+export interface SessionMessagesResult {
+  items: HistoryMessage[];
+  /** Present only on non-200 responses (the API's error envelope). */
+  error?: ApiErrorBody["error"];
+}
+
+/** The caller's session's full history, fetched live from RagFlow by the API. */
+export function getSessionMessages(id: string): Promise<ApiResult<SessionMessagesResult>> {
+  return apiJson<SessionMessagesResult>(`/api/chat/sessions/${id}/messages`);
+}
+
+/** Deletes the session from RagFlow and from our table. */
+export async function deleteChatSession(id: string): Promise<ApiResult<{ error?: ApiErrorBody["error"] }>> {
+  const res = await fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
+  const body = ((await res.json().catch(() => undefined)) as { error?: ApiErrorBody["error"] } | undefined) ?? {};
+  return { status: res.status, body };
+}
+
 /** Sidebar title from the first message — mirrors the API's derivation. */
 export function titleFromMessage(query: string): string {
   const trimmed = query.trim().replace(/\s+/g, " ");

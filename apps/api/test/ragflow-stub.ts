@@ -29,12 +29,28 @@ export interface StoredCompletion {
   streamedSessionId: string
 }
 
+export interface StoredSessionMessage {
+  role: 'user' | 'assistant'
+  content: string
+  /** The stored-history citation LIST shape (research #20); null for user messages. */
+  reference: unknown
+}
+
+export interface StoredAgentSession {
+  id: string
+  messages: StoredSessionMessage[]
+}
+
 export interface RagflowStub {
   url: string
   uploads: StoredUpload[]
   chunkMethodCalls: ChunkMethodCall[]
   parseTriggers: string[]
   completionRequests: StoredCompletion[]
+  /** The agent sessions the stub has accumulated from completions. */
+  agentSessions: Map<string, StoredAgentSession>
+  /** RagFlow session ids deleted through DELETE /sessions. */
+  sessionDeletes: string[]
   failUploads: boolean
   failDownloads: boolean
   failDeletes: boolean
@@ -42,6 +58,7 @@ export interface RagflowStub {
   failChunkMethodPut: boolean
   failList: boolean
   failCompletions: boolean
+  failSessionDeletes: boolean
   setRun: (id: string, run: string) => void
   setProgress: (id: string, progress: number) => void
   setProgressMsg: (id: string, message: string) => void
@@ -102,6 +119,32 @@ const COMPLETION_REFERENCE = {
   },
 }
 
+// The full assistant message the stub stores per completion — the streamed
+// deltas joined (think tags included, exactly as RagFlow stores them), plus
+// the stored-history citation LIST shape (research #20).
+const STUB_ASSISTANT_CONTENT =
+  '<think>The user asks about the leave policy. The policy states 21 days per year.\n</think>' +
+  'Leave is capped at 21 days per year [1]. It resets every calendar year [2].'
+
+const STORED_REFERENCE = [
+  {
+    citation_id: 'c1',
+    content: 'Leave is capped at 21 days per year.',
+    document_id: REFERENCE_DOCUMENT_ID,
+    document_name: REFERENCE_DOCUMENT_NAME,
+    id: 'chunk-1',
+    positions: [[3, 0.1, 0.2, 0.8, 0.05]],
+  },
+  {
+    citation_id: 'c2',
+    content: 'It resets every calendar year.',
+    document_id: 'stub-external-doc',
+    document_name: 'External Handbook.pdf',
+    id: 'chunk-2',
+    positions: [],
+  },
+]
+
 /** Small per-frame delay so the web e2e can observe the streaming state. */
 const COMPLETION_FRAME_DELAY_MS = 30
 
@@ -110,12 +153,16 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
   const chunkMethodCalls: ChunkMethodCall[] = []
   const parseTriggers: string[] = []
   const completionRequests: StoredCompletion[] = []
+  const agentSessions = new Map<string, StoredAgentSession>()
+  const sessionDeletes: string[] = []
   const stub: RagflowStub = {
     url: '',
     uploads,
     chunkMethodCalls,
     parseTriggers,
     completionRequests,
+    agentSessions,
+    sessionDeletes,
     failUploads: false,
     failDownloads: false,
     failDeletes: false,
@@ -123,6 +170,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     failChunkMethodPut: false,
     failList: false,
     failCompletions: false,
+    failSessionDeletes: false,
     setRun: (id, run) => {
       const upload = uploads.find((u) => u.id === id)
       if (upload !== undefined) upload.run = run
@@ -165,6 +213,46 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       return
     }
 
+    // Agent session lifecycle (research #20): GET one session by id with
+    // dsl=false (history embedded as message[]), DELETE with ids in the body.
+    const sessionMatch = url.pathname.match(/^\/api\/v1\/agents\/([^/]+)\/sessions$/)
+
+    if (sessionMatch !== null && req.method === 'GET') {
+      const id = url.searchParams.get('id')
+      const session = id !== null ? agentSessions.get(id) : undefined
+      if (session === undefined) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ code: 102, message: `Session not found: '${id ?? ''}'` }))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          code: 0,
+          data: { id: session.id, name: session.messages[0]?.content ?? session.id, message: session.messages },
+        }),
+      )
+      return
+    }
+
+    if (sessionMatch !== null && req.method === 'DELETE') {
+      if (stub.failSessionDeletes) return fail(500, 'simulated session delete failure')
+      const body = JSON.parse((await readBody(req)) || '{}') as { ids?: unknown; delete_all?: unknown }
+      const ids = body.ids
+      if (!Array.isArray(ids)) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ code: 102, message: '`ids` is required' }))
+        return
+      }
+      for (const id of ids) {
+        sessionDeletes.push(String(id))
+        agentSessions.delete(String(id))
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ code: 0 }))
+      return
+    }
+
     // Agent completion SSE (research #20 wire shape): POST
     // /api/v1/agents/chat/completions with `{agent_id, query, stream: true,
     // session_id?}`; when no session_id is sent, a session is auto-created
@@ -183,6 +271,14 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const sentSessionId = typeof body.session_id === 'string' && body.session_id !== '' ? body.session_id : null
       const streamedSessionId = sentSessionId ?? randomUUID()
       completionRequests.push({ agentId, sessionId: sentSessionId, query: body.query, streamedSessionId })
+
+      // The session accumulates the exchange, mirroring RagFlow: the user
+      // message, then the full assistant message (think tags included) with
+      // the stored-history citation LIST shape.
+      const session = agentSessions.get(streamedSessionId) ?? { id: streamedSessionId, messages: [] }
+      session.messages.push({ role: 'user', content: body.query, reference: null })
+      session.messages.push({ role: 'assistant', content: STUB_ASSISTANT_CONTENT, reference: STORED_REFERENCE })
+      agentSessions.set(streamedSessionId, session)
 
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       for (const delta of COMPLETION_DELTAS) {

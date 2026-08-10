@@ -28,7 +28,10 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(db)
   stub.completionRequests.length = 0
+  stub.agentSessions.clear()
+  stub.sessionDeletes.length = 0
   stub.failCompletions = false
+  stub.failSessionDeletes = false
 })
 
 const MEMBER = { email: 'member@example.com', password: 'correct-horse' }
@@ -107,6 +110,14 @@ async function completions(cookie: string, body: unknown): Promise<Response> {
     headers: { 'content-type': 'application/json', ...cookieHeader(cookie) },
     body: JSON.stringify(body),
   })
+}
+
+/** Completes once and returns the created session id. */
+async function createSession(cookie: string, query: string): Promise<string> {
+  const events = await sseOf(await completions(cookie, { query }))
+  const sessionId = events[0]?.data.id
+  expect(sessionId).toBeTypeOf('string')
+  return sessionId as string
 }
 
 interface WireSession {
@@ -315,6 +326,145 @@ describe('GET /chat/sessions', () => {
 
   it('requires a session', async () => {
     const res = await app.request('/chat/sessions')
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /chat/sessions/:id/messages', () => {
+  it('normalizes stored history: roles, thinking, answer, and citations', async () => {
+    const cookie = await activeMemberCookie()
+    // Seed the Document citation 1 maps to (issue #25 mapping, now for the
+    // stored-history list shape).
+    const [member] = await db.select({ id: users.id }).from(users).where(eq(users.email, MEMBER.email)).limit(1)
+    const [seeded] = await db
+      .insert(documents)
+      .values({
+        name: 'Leave Policy.md',
+        ext: 'md',
+        sizeBytes: 12,
+        ragflowDocumentId: 'stub-doc-1',
+        chunkMethod: 'naive',
+        status: 'draft',
+        ownerId: member!.id,
+      })
+      .returning({ id: documents.id })
+    expect(seeded).toBeDefined()
+
+    const sessionId = await createSession(cookie, 'Leave days?')
+    const res = await app.request(`/chat/sessions/${sessionId}/messages`, { headers: cookieHeader(cookie) })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      items: Array<{ role: string; content: string; thinking?: string; references?: unknown }>
+    }
+    expect(body.items).toHaveLength(2)
+    expect(body.items[0]).toEqual({ role: 'user', content: 'Leave days?' })
+    const assistant = body.items[1]
+    expect(assistant?.role).toBe('assistant')
+    expect(assistant?.thinking).toBe('The user asks about the leave policy. The policy states 21 days per year.\n')
+    expect(assistant?.content).toBe('Leave is capped at 21 days per year [1]. It resets every calendar year [2].')
+    expect(assistant?.references).toEqual([
+      {
+        n: 1,
+        content: 'Leave is capped at 21 days per year.',
+        document_name: 'Leave Policy.md',
+        page: 3,
+        ragflow_document_id: 'stub-doc-1',
+        document_id: seeded!.id,
+      },
+      {
+        n: 2,
+        content: 'It resets every calendar year.',
+        document_name: 'External Handbook.pdf',
+        page: null,
+        ragflow_document_id: 'stub-external-doc',
+        document_id: null,
+      },
+    ])
+  })
+
+  it('returns 404 for an unknown session and 403 for another user\'s session', async () => {
+    const alice = await activeMemberCookie()
+    const sessionId = await createSession(alice, 'Mine')
+
+    const missing = await app.request('/chat/sessions/00000000-0000-0000-0000-000000000000/messages', {
+      headers: cookieHeader(alice),
+    })
+    expect(missing.status).toBe(404)
+
+    const bob = await activeMemberCookie(OTHER.email)
+    const foreign = await app.request(`/chat/sessions/${sessionId}/messages`, { headers: cookieHeader(bob) })
+    expect(foreign.status).toBe(403)
+    expect(((await foreign.json()) as { error: { code: string } }).error.code).toBe('forbidden')
+  })
+
+  it('returns 502 when RagFlow no longer has the session', async () => {
+    const cookie = await activeMemberCookie()
+    const sessionId = await createSession(cookie, 'Gone')
+    // Delete the session from the stub directly (as RagFlow would) — our row
+    // still exists, so the live fetch fails upstream.
+    await fetch(`${stub.url}/api/v1/agents/dev-agent/sessions`, {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [stub.completionRequests[0]?.streamedSessionId], delete_all: false }),
+    })
+    const res = await app.request(`/chat/sessions/${sessionId}/messages`, { headers: cookieHeader(cookie) })
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('upstream_error')
+  })
+
+  it('requires a session', async () => {
+    const res = await app.request('/chat/sessions/00000000-0000-0000-0000-000000000000/messages')
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('DELETE /chat/sessions/:id', () => {
+  it('deletes from RagFlow then from our table, returning 204', async () => {
+    const cookie = await activeMemberCookie()
+    const sessionId = await createSession(cookie, 'Doomed')
+    const ragflowSessionId = stub.completionRequests[0]?.streamedSessionId
+
+    const res = await app.request(`/chat/sessions/${sessionId}`, { method: 'DELETE', headers: cookieHeader(cookie) })
+    expect(res.status).toBe(204)
+
+    // Both backends are gone: the stub saw the delete, our row is gone, and
+    // the session no longer lists.
+    expect(stub.sessionDeletes).toEqual([ragflowSessionId])
+    expect(stub.agentSessions.has(ragflowSessionId as string)).toBe(false)
+    expect(await db.select().from(chatSessions)).toHaveLength(0)
+    const list = (await (await app.request('/chat/sessions', { headers: cookieHeader(cookie) })).json()) as WireList
+    expect(list.items).toHaveLength(0)
+  })
+
+  it('returns 404 for an unknown session and 403 for another user\'s session', async () => {
+    const alice = await activeMemberCookie()
+    const sessionId = await createSession(alice, 'Mine')
+
+    const missing = await app.request('/chat/sessions/00000000-0000-0000-0000-000000000000', {
+      method: 'DELETE',
+      headers: cookieHeader(alice),
+    })
+    expect(missing.status).toBe(404)
+
+    const bob = await activeMemberCookie(OTHER.email)
+    const foreign = await app.request(`/chat/sessions/${sessionId}`, { method: 'DELETE', headers: cookieHeader(bob) })
+    expect(foreign.status).toBe(403)
+    expect(stub.sessionDeletes).toHaveLength(0)
+  })
+
+  it('leaves the row when RagFlow delete fails', async () => {
+    const cookie = await activeMemberCookie()
+    const sessionId = await createSession(cookie, 'Sticky')
+
+    stub.failSessionDeletes = true
+    const res = await app.request(`/chat/sessions/${sessionId}`, { method: 'DELETE', headers: cookieHeader(cookie) })
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('upstream_error')
+    expect(await db.select().from(chatSessions)).toHaveLength(1)
+  })
+
+  it('requires a session', async () => {
+    const res = await app.request('/chat/sessions/00000000-0000-0000-0000-000000000000', { method: 'DELETE' })
     expect(res.status).toBe(401)
   })
 })

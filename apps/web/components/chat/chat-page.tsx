@@ -1,12 +1,14 @@
 "use client";
 
-import { ChevronDown, ExternalLink, Plus, Send, Sparkles } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
+  deleteChatSession,
+  getSessionMessages,
   listChatSessions,
   streamCompletion,
   titleFromMessage,
@@ -30,11 +32,11 @@ const EMPTY_MESSAGES: ChatMessage[] = [];
 const newId = (): string => crypto.randomUUID();
 
 /**
- * The chat surface (spec #23, variant B layout). This slice: sidebar of the
- * caller's sessions, lazy session creation on the first message, and answers
- * streaming token by token through the normalized SSE contract. Message
- * history is not fetched in this slice — each session's thread lives in this
- * component for the page session.
+ * The chat surface (spec #23, variant B layout): sidebar of the caller's
+ * sessions, lazy session creation on the first message, answers streaming
+ * token by token through the normalized SSE contract, and — this slice —
+ * resuming a session's history from RagFlow and deleting sessions (with a
+ * confirm step).
  */
 export function ChatPage() {
   const router = useRouter();
@@ -43,14 +45,62 @@ export function ChatPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [threads, setThreads] = useState<Map<string, ChatMessage[]>>(new Map());
   const [streaming, setStreaming] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   // The key of the thread the in-flight completion writes into ("new" until
   // the lazy session event re-homes it under the created session id).
   const threadKeyRef = useRef<string>("new");
+  // Monotonic id of the newest history fetch: rapid session clicks must not
+  // let an older fetch's settle (or its loading-clear) clobber a newer one.
+  const historyRequestRef = useRef(0);
 
-  // Initial load: the session list, preselected from ?s=.
+  // Loads a session's history from the server into the thread. Always
+  // refetches: after a follow-up the server is the source of truth.
+  const loadHistory = useCallback(
+    (sessionId: string): void => {
+      const requestId = ++historyRequestRef.current;
+      setHistoryLoading(true);
+      setError(null);
+      getSessionMessages(sessionId)
+        .then(({ status, body }) => {
+          if (requestId !== historyRequestRef.current) return; // superseded
+          if (status === 401) {
+            router.replace("/auth/sign-in");
+            return;
+          }
+          if (status !== 200) {
+            setError(body.error?.message ?? "Could not load this session.");
+            return;
+          }
+          setThreads((prev) => {
+            const next = new Map(prev);
+            next.set(
+              sessionId,
+              body.items.map((m) => ({
+                id: newId(),
+                role: m.role,
+                content: m.content,
+                thinking: m.thinking,
+                citations: m.references,
+              })),
+            );
+            return next;
+          });
+        })
+        .catch(() => {
+          if (requestId === historyRequestRef.current) setError("Could not load this session.");
+        })
+        .finally(() => {
+          if (requestId === historyRequestRef.current) setHistoryLoading(false);
+        });
+    },
+    [router],
+  );
+
+  // Initial load: the session list, preselected from ?s=, with its history.
   useEffect(() => {
     let cancelled = false;
     listChatSessions()
@@ -64,6 +114,7 @@ export function ChatPage() {
         const param = searchParams.get("s");
         const match = body.items.find((s) => s.id === param);
         setActiveId(match?.id ?? null);
+        if (match !== undefined) loadHistory(match.id);
       })
       .catch(() => {
         if (!cancelled) setLoadError("Could not load chat sessions.");
@@ -71,7 +122,7 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [router, searchParams]);
+  }, [router, searchParams, loadHistory]);
 
   const activeThread = useMemo(
     () => (activeId === null ? threads.get("new") ?? EMPTY_MESSAGES : threads.get(activeId) ?? EMPTY_MESSAGES),
@@ -94,7 +145,8 @@ export function ChatPage() {
   const startNew = useCallback((): void => {
     if (streaming) return;
     setActiveId(null);
-    setSendError(null);
+    setConfirmDeleteId(null);
+    setError(null);
     router.replace("/chat", { scroll: false });
   }, [router, streaming]);
 
@@ -102,10 +154,40 @@ export function ChatPage() {
     (id: string): void => {
       if (streaming) return;
       setActiveId(id);
-      setSendError(null);
+      setConfirmDeleteId(null);
+      setError(null);
       router.replace(`/chat?s=${id}`, { scroll: false });
+      loadHistory(id);
     },
-    [router, streaming],
+    [router, streaming, loadHistory],
+  );
+
+  const removeSession = useCallback(
+    async (sessionId: string): Promise<void> => {
+      const result = await deleteChatSession(sessionId);
+      if (result.status === 401) {
+        router.replace("/auth/sign-in");
+        return;
+      }
+      if (result.status !== 204) {
+        setError(result.body.error?.message ?? "Could not delete the session.");
+        setConfirmDeleteId(null);
+        return;
+      }
+      setConfirmDeleteId(null);
+      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      setThreads((prev) => {
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+      if (activeId === sessionId) {
+        setActiveId(null);
+        router.replace("/chat", { scroll: false });
+      }
+      refreshSessions();
+    },
+    [activeId, router, refreshSessions],
   );
 
   const send = useCallback(
@@ -113,7 +195,7 @@ export function ChatPage() {
       const trimmed = text.trim();
       if (trimmed === "" || streaming) return;
       setStreaming(true);
-      setSendError(null);
+      setError(null);
       threadKeyRef.current = activeId ?? "new";
 
       const userMsg: ChatMessage = { id: newId(), role: "user", content: trimmed };
@@ -169,11 +251,11 @@ export function ChatPage() {
           } else if (event.type === "references") {
             patchAssistant((m) => ({ ...m, citations: event.items }));
           } else if (event.type === "error") {
-            setSendError(event.message);
+            setError(event.message);
           }
         });
       } catch {
-        setSendError("Could not reach the agent. Try again.");
+        setError("Could not reach the agent. Try again.");
       } finally {
         patchAssistant((m) => ({ ...m, streaming: false }));
         setStreaming(false);
@@ -201,20 +283,56 @@ export function ChatPage() {
           <ul className="space-y-0.5">
             {sessions.map((s) => (
               <li key={s.id}>
-                <button
-                  type="button"
-                  aria-current={s.id === activeId ? "true" : undefined}
-                  onClick={() => select(s.id)}
-                  className={cn(
-                    "flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
-                    s.id === activeId ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/60",
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate font-medium">{s.title}</p>
-                    <p className="text-xs text-muted-foreground">{relativeTime(s.updated_at)}</p>
+                {confirmDeleteId === s.id ? (
+                  <div className="flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-destructive">
+                      Delete this chat?
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-7 px-2 text-xs"
+                      aria-label="Confirm delete"
+                      onClick={() => void removeSession(s.id)}
+                    >
+                      Delete
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      aria-label="Cancel delete"
+                      onClick={() => setConfirmDeleteId(null)}
+                    >
+                      Cancel
+                    </Button>
                   </div>
-                </button>
+                ) : (
+                  <div className="group relative">
+                    <button
+                      type="button"
+                      aria-current={s.id === activeId ? "true" : undefined}
+                      onClick={() => select(s.id)}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center gap-2 rounded-lg py-2 pl-2.5 pr-8 text-left text-sm transition-colors",
+                        s.id === activeId ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/60",
+                      )}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{s.title}</p>
+                        <p className="text-xs text-muted-foreground">{relativeTime(s.updated_at)}</p>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${s.title}`}
+                      onClick={() => setConfirmDeleteId(s.id)}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" aria-hidden />
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -229,7 +347,9 @@ export function ChatPage() {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
-            {activeThread.length === 0 ? (
+            {historyLoading ? (
+              <p className="pt-16 text-center text-sm text-muted-foreground">Loading this conversation…</p>
+            ) : activeThread.length === 0 ? (
               <EmptyState />
             ) : (
               activeThread.map((m) => <MessageBubble key={m.id} message={m} />)
@@ -239,12 +359,14 @@ export function ChatPage() {
         </div>
         <div className="border-t px-6 py-3">
           <div className="mx-auto max-w-3xl">
-            {sendError !== null && (
+            {error !== null && (
               <p role="alert" className="mb-2 text-sm text-destructive">
-                {sendError}
+                {error}
               </p>
             )}
-            <Composer onSend={(text) => void send(text)} disabled={streaming} />
+            {/* The composer is also disabled while history loads, so a send
+                cannot race the history fetch replacing the thread. */}
+            <Composer onSend={(text) => void send(text)} disabled={streaming || historyLoading} />
           </div>
         </div>
       </section>

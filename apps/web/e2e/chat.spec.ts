@@ -188,6 +188,74 @@ test.describe('chat', () => {
     await expect(page.getByRole('button', { name: 'Show thinking' })).toBeVisible()
   })
 
+  test('resuming a past session renders its full thread with citations', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    // The managed Document so the history citation links to it (issue #25).
+    await uploadFile(page, 'Leave Policy.md', '# Leave policy\n')
+
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+    const composer = page.getByLabel('Message', { exact: true })
+    const query = `Resume ${RUN_TAG}`
+    await composer.fill(query)
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    // Reload: the pinned ?s= URL deep-links straight into the history.
+    await page.reload()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    // Clicking the session in the sidebar re-renders the full thread from
+    // history — the user question, the answer, the reasoning toggle, and the
+    // citation chips.
+    const sidebar = page.locator('aside').last()
+    await expect(sidebar.getByText(query)).toBeVisible()
+    await sidebar.getByText(query).click()
+
+    await expect(page.locator('div.bg-primary', { hasText: query })).toBeVisible()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Show thinking' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 1: Leave Policy.md' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 2: External Handbook.pdf' })).toBeVisible()
+
+    // History citations link to managed Documents exactly as live ones do.
+    await page.getByRole('button', { name: 'Source 1: Leave Policy.md' }).click()
+    await expect(page.getByRole('link', { name: 'Open full document' })).toBeVisible()
+    await page.getByRole('button', { name: 'Source 2: External Handbook.pdf' }).click()
+    await expect(page.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
+  })
+
+  test('deleting a session removes it from the sidebar after confirm', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    const query = `Doomed ${RUN_TAG}`
+    await composer.fill(query)
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    const sidebar = page.locator('aside').last()
+    const row = sidebar.locator('li', { hasText: query })
+    // The confirm step replaces the row's content (and its title text), so
+    // the confirming row is found by its prompt instead.
+    const confirmRow = sidebar.locator('li', { hasText: 'Delete this chat?' })
+
+    // Cancel first: nothing is deleted.
+    await row.getByRole('button', { name: `Delete ${query}` }).click()
+    await expect(confirmRow).toBeVisible()
+    await confirmRow.getByRole('button', { name: 'Cancel delete' }).click()
+    await expect(sidebar.getByText(query)).toBeVisible()
+
+    // Confirm: the session leaves the sidebar and stays gone on reload.
+    await row.getByRole('button', { name: `Delete ${query}` }).click()
+    await confirmRow.getByRole('button', { name: 'Confirm delete' }).click()
+    await expect(sidebar.getByText(query)).not.toBeVisible()
+    await page.reload()
+    await expect(sidebar.getByText(query)).not.toBeVisible()
+  })
+
   test('the Chat nav item is visible to members too', async ({ page, request }) => {
     const email = uniqueEmail('chatmember')
     await apiSignUp(request, email)

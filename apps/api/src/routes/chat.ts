@@ -3,10 +3,18 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { authMiddleware } from '../auth/middleware.js'
 import type { User } from '../auth/user.js'
-import { createCompletionTransform } from '../chat/transform.js'
+import {
+  createCompletionTransform,
+  normalizeReference,
+  splitThinking,
+  type ChatCitation,
+  type DocumentIdLookup,
+} from '../chat/transform.js'
+import type { DB } from '../db/client.js'
 import { chatSessions, documents } from '../db/schema.js'
 import type { Deps } from '../deps.js'
 import { sendError } from '../errors.js'
+import { isUuid } from '../ids.js'
 import { RagflowError } from '../ragflow/client.js'
 import { jsonValidator, queryValidator } from '../validation.js'
 
@@ -45,6 +53,45 @@ export function chatSessionShape(row: typeof chatSessions.$inferSelect): ChatSes
 export function titleFromMessage(query: string): string {
   const trimmed = query.trim().replace(/\s+/g, ' ')
   return trimmed.length > 48 ? `${trimmed.slice(0, 48)}…` : trimmed
+}
+
+/**
+ * Preloads the ragflow_document_id → documents.id map (one query per
+ * request — the corpus is small) so the transform's citation mapping stays
+ * pure and synchronous.
+ */
+async function documentIdLookupFor(db: DB): Promise<DocumentIdLookup> {
+  const rows = await db.select({ id: documents.id, ragflowDocumentId: documents.ragflowDocumentId }).from(documents)
+  const byRagflowId = new Map(rows.map((r) => [r.ragflowDocumentId, r.id]))
+  return (ragflowDocumentId: string): string | null => byRagflowId.get(ragflowDocumentId) ?? null
+}
+
+export interface HistoryMessageShape {
+  role: 'user' | 'assistant'
+  content: string
+  thinking?: string
+  references?: ChatCitation[]
+}
+
+/**
+ * Normalizes one stored-history message (spec #23): the assistant's inline
+ * <think> blocks split off as `thinking`, and the stored-history citation
+ * LIST shape collapses to the contract shape via #25's normalizer.
+ */
+export function historyMessageShape(raw: unknown, documentIdLookup: DocumentIdLookup): HistoryMessageShape | null {
+  if (raw === null || typeof raw !== 'object') return null
+  const message = raw as { role?: unknown; content?: unknown; reference?: unknown }
+  if (message.role !== 'user' && message.role !== 'assistant') return null
+  const content = typeof message.content === 'string' ? message.content : ''
+  const shape: HistoryMessageShape = { role: message.role, content }
+  if (message.role === 'assistant') {
+    const { thinking, answer } = splitThinking(content)
+    shape.content = answer
+    if (thinking !== '') shape.thinking = thinking
+    const references = normalizeReference(message.reference, documentIdLookup)
+    if (references.length > 0) shape.references = references
+  }
+  return shape
 }
 
 /**
@@ -110,17 +157,12 @@ export function chatRoutes(deps: Deps) {
     const upstreamBody: ReadableStream<Uint8Array> = upstream.body
 
     const lazy = ragflowSessionId === null
-    // Citation→Document mapping, preloaded once per completion (the corpus
-    // is small) so the transform stays pure and synchronous: a citation
+    // Citation→Document mapping, preloaded once per completion: a citation
     // whose RagFlow document id matches a Document comes back with our id,
     // enabling the client's "Open full document" link.
-    const documentRows = await deps.db
-      .select({ id: documents.id, ragflowDocumentId: documents.ragflowDocumentId })
-      .from(documents)
-    const documentByRagflowId = new Map(documentRows.map((r) => [r.ragflowDocumentId, r.id]))
     const transform = createCompletionTransform({
       lazy,
-      documentIdLookup: (ragflowDocumentId) => documentByRagflowId.get(ragflowDocumentId) ?? null,
+      documentIdLookup: await documentIdLookupFor(deps.db),
     })
     const title = titleFromMessage(body.query)
 
@@ -238,6 +280,54 @@ export function chatRoutes(deps: Deps) {
       page: query.page,
       page_size: query.page_size,
     })
+  })
+
+  // GET /chat/sessions/:id/messages — the caller's session's history, fetched
+  // live from RagFlow and normalized (stored-history citation shape via #25's
+  // normalizer; reasoning split off as `thinking`).
+  app.get('/sessions/:id/messages', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Chat session not found')
+    const [row] = await deps.db.select().from(chatSessions).where(eq(chatSessions.id, id)).limit(1)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Chat session not found')
+    // Strictly per-user — no super-admin override (spec #23).
+    if (row.ownerId !== user.id) return sendError(c, 403, 'forbidden', 'Not your chat session')
+
+    let session
+    try {
+      session = await deps.agent.fetchSession(row.ragflowSessionId)
+    } catch (err) {
+      if (err instanceof RagflowError) return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      throw err
+    }
+
+    const raw = session.message
+    const documentIdLookup = await documentIdLookupFor(deps.db)
+    const items = Array.isArray(raw)
+      ? raw
+          .map((m) => historyMessageShape(m, documentIdLookup))
+          .filter((m): m is HistoryMessageShape => m !== null)
+      : []
+    return c.json({ items })
+  })
+
+  // DELETE /chat/sessions/:id — RagFlow first, then our row; owner only.
+  app.delete('/sessions/:id', async (c) => {
+    const user = c.get('user')
+    const id = c.req.param('id')
+    if (!isUuid(id)) return sendError(c, 404, 'not_found', 'Chat session not found')
+    const [row] = await deps.db.select().from(chatSessions).where(eq(chatSessions.id, id)).limit(1)
+    if (row === undefined) return sendError(c, 404, 'not_found', 'Chat session not found')
+    if (row.ownerId !== user.id) return sendError(c, 403, 'forbidden', 'Not your chat session')
+    try {
+      await deps.agent.deleteSession(row.ragflowSessionId)
+    } catch (err) {
+      if (err instanceof RagflowError) return sendError(c, 502, 'upstream_error', 'RagFlow is unavailable')
+      throw err
+    }
+    await deps.db.delete(chatSessions).where(eq(chatSessions.id, id))
+    return c.body(null, 204)
   })
 
   return app

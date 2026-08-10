@@ -14,12 +14,14 @@ interface RecordedRequest {
 
 interface PayloadServer {
   url: string
+  payload: { current: unknown }
   requests: RecordedRequest[]
   close: () => Promise<void>
 }
 
-/** Static HTTP server that records requests and answers 200 with `{}`. */
+/** Static HTTP server that records requests and answers 200 with `payload.current`. */
 async function startPayloadServer(): Promise<PayloadServer> {
+  const payload: { current: unknown } = { current: {} }
   const requests: RecordedRequest[] = []
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -32,13 +34,14 @@ async function startPayloadServer(): Promise<PayloadServer> {
         contentType: req.headers['content-type'] ?? null,
       })
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end('{}')
+      res.end(typeof payload.current === 'string' ? payload.current : JSON.stringify(payload.current))
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return {
     url: `http://127.0.0.1:${port}`,
+    payload,
     requests,
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -100,5 +103,63 @@ describe('RagFlow agent client — completion wire contract', () => {
   it('throws RagflowError when upstream answers non-2xx', async () => {
     const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: 'http://127.0.0.1:1' })
     await expect(client.completions({ sessionId: null, query: 'hi' })).rejects.toBeInstanceOf(RagflowError)
+  })
+})
+
+// Pins the session fetch/delete wire contracts (research #20): GET one
+// session with `?id=&dsl=false` (always dsl=false — the DSL payload balloons
+// to ~2 MB), DELETE with `{ids, delete_all}` in the JSON body.
+describe('RagFlow agent client — session wire contracts', () => {
+  let server: PayloadServer
+  let url: string
+
+  beforeAll(async () => {
+    server = await startPayloadServer()
+    url = server.url
+  })
+
+  afterAll(async () => {
+    await server.close()
+  })
+
+  it('fetchSession requests the session by id with dsl=false and returns the payload data', async () => {
+    server.payload.current = { code: 0, data: { id: 's-1', message: [{ role: 'user', content: 'hi' }] } }
+    const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
+    const session = await client.fetchSession('s-1')
+    const req = server.requests.at(-1)
+    expect(req?.method).toBe('GET')
+    expect(req?.url).toContain('/api/v1/agents/dev-agent/sessions')
+    expect(req?.url).toContain('id=s-1')
+    expect(req?.url).toContain('dsl=false')
+    expect(session).toEqual({ id: 's-1', message: [{ role: 'user', content: 'hi' }] })
+  })
+
+  it('fetchSession throws RagflowError when RagFlow rejects the session', async () => {
+    server.payload.current = { code: 102, message: 'session not found' }
+    const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await expect(client.fetchSession('s-1')).rejects.toBeInstanceOf(RagflowError)
+  })
+
+  it('fetchSession throws RagflowError when the payload is not JSON', async () => {
+    server.payload.current = '<html>proxy error</html>'
+    const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await expect(client.fetchSession('s-1')).rejects.toBeInstanceOf(RagflowError)
+  })
+
+  it('deleteSession sends ids and delete_all in the JSON body', async () => {
+    server.payload.current = { code: 0 }
+    const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await client.deleteSession('s-1')
+    const req = server.requests.at(-1)
+    expect(req?.method).toBe('DELETE')
+    expect(req?.url).toBe('/api/v1/agents/dev-agent/sessions')
+    expect(req?.contentType).toContain('application/json')
+    expect(JSON.parse(req?.body ?? '{}')).toEqual({ ids: ['s-1'], delete_all: false })
+  })
+
+  it('deleteSession throws RagflowError when RagFlow rejects with a non-zero code', async () => {
+    server.payload.current = { code: 102, message: 'session not found' }
+    const client = createAgentClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await expect(client.deleteSession('s-1')).rejects.toBeInstanceOf(RagflowError)
   })
 })
