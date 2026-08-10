@@ -11,7 +11,7 @@ await ensureDatabaseExists(E2E_DATABASE_URL)
 // Clean slate for this run (a freshly created database has no tables yet —
 // the API applies migrations and re-seeds the super admin on boot).
 const sql = postgres(E2E_DATABASE_URL)
-for (const table of ['document_history', 'documents', 'users']) {
+for (const table of ['document_history', 'documents', 'chat_sessions', 'users']) {
   const [known] = await sql`SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ${table}`
   if (known !== undefined) {
     await sql.unsafe(`TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`)

@@ -115,6 +115,78 @@ describe('RagFlow stub — parse trigger wire contract', () => {
   })
 })
 
+// Pins the stub's agent completion SSE to the wire shape confirmed in
+// research #20: `event: message` frames carrying `{code, data: {session_id,
+// content}}`, a `message_end` frame with the live-shape reference, and a
+// closing `data: [DONE]`. The proxy's transform consumes exactly this shape;
+// a regression here would silently change what the transform sees.
+describe('RagFlow stub — agent completion SSE wire shape', () => {
+  let stub: RagflowStub
+
+  beforeAll(async () => {
+    stub = await startRagflowStub()
+  })
+
+  afterAll(async () => {
+    await stub.close()
+  })
+
+  it('streams message frames with session_id and content, then [DONE]', async () => {
+    const res = await fetch(`${stub.url}/api/v1/agents/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent_id: 'dev-agent', query: 'hi', stream: true }),
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    const body = await res.text()
+
+    const frames = body
+      .split('\n\n')
+      .map((block) => block.trim())
+      .filter((block) => block !== '')
+    expect(frames.at(-1)).toBe('data: [DONE]')
+
+    // `event: message\n` (not `event: message`) so message_end does not leak in.
+    const messageFrames = frames.filter((f) => f.startsWith('event: message\n'))
+    const messageEndFrames = frames.filter((f) => f.startsWith('event: message_end'))
+    expect(messageFrames.length).toBeGreaterThan(1)
+    expect(messageEndFrames).toHaveLength(1)
+
+    // Every message frame carries the auto-created session id and a content delta.
+    const sessionIds = messageFrames.map((f) => {
+      const data = JSON.parse(f.replace('event: message\ndata: ', '')) as {
+        code: number
+        data?: { session_id?: unknown; content?: unknown }
+      }
+      expect(data.code).toBe(0)
+      expect(typeof data.data?.content).toBe('string')
+      return data.data?.session_id
+    })
+    expect(new Set(sessionIds).size).toBe(1)
+    const streamedSessionId = sessionIds[0]
+    expect(streamedSessionId).toBeTypeOf('string')
+
+    // The auto-created session is the one recorded in the request log.
+    expect(stub.completionRequests[0]?.sessionId).toBeNull()
+    expect(stub.completionRequests[0]?.streamedSessionId).toBe(streamedSessionId)
+  })
+
+  it('echoes a sent session id in every frame', async () => {
+    const res = await fetch(`${stub.url}/api/v1/agents/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agent_id: 'dev-agent', query: 'hi', stream: true, session_id: 's-123' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.text()
+    const first = body.split('\n\n')[0]
+    if (first === undefined) throw new Error('no frames')
+    const data = JSON.parse(first.replace('event: message\ndata: ', '')) as { data?: { session_id?: unknown } }
+    expect(data.data?.session_id).toBe('s-123')
+  })
+})
+
 // Pins the stub's delete contract to real RagFlow v0.26.4: DELETE on the
 // collection endpoint with `ids` (plural, array) in the JSON body — DELETE
 // on the single-document path answers 405 (verified live while fixing

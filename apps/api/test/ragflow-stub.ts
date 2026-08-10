@@ -20,17 +20,28 @@ export interface ChunkMethodCall {
   method: string
 }
 
+export interface StoredCompletion {
+  agentId: string
+  /** The session id the client sent — null means lazy auto-create. */
+  sessionId: string | null
+  query: string
+  /** The session id carried in the stream (auto-created when the request sent none). */
+  streamedSessionId: string
+}
+
 export interface RagflowStub {
   url: string
   uploads: StoredUpload[]
   chunkMethodCalls: ChunkMethodCall[]
   parseTriggers: string[]
+  completionRequests: StoredCompletion[]
   failUploads: boolean
   failDownloads: boolean
   failDeletes: boolean
   failParse: boolean
   failChunkMethodPut: boolean
   failList: boolean
+  failCompletions: boolean
   setRun: (id: string, run: string) => void
   setProgress: (id: string, progress: number) => void
   setProgressMsg: (id: string, message: string) => void
@@ -46,21 +57,57 @@ export interface RagflowStub {
  * sweeper transitions by mutating the stub's run state, then assert through
  * the API.
  */
+// The scripted agent completion stream: `<think>` tags SPLIT across deltas
+// (the open tag is cut by the first frame boundary, the close tag by the
+// last) so the API e2e proves the transform's tag handling end-to-end, a
+// message_end with a live-shape reference the transform drops this slice,
+// and the answer in word-level deltas so the web e2e can observe the answer
+// streaming in incrementally.
+const COMPLETION_DELTAS = [
+  '<thi',
+  'nk>The user asks about the leave policy. The policy states 21 days per year.\n</th',
+  'ink>Leave',
+  ' is capped',
+  ' at 21 days',
+  ' per year.',
+  ' It resets',
+  ' every',
+  ' calendar year.',
+]
+
+const COMPLETION_REFERENCE = {
+  chunks: {
+    '1': {
+      content: 'Leave is capped at 21 days per year.',
+      document_id: 'stub-doc-1',
+      document_name: 'Leave Policy.md',
+      dataset_id: 'stub-dataset',
+      positions: [[3, 0.1, 0.2, 0.8, 0.05]],
+    },
+  },
+}
+
+/** Small per-frame delay so the web e2e can observe the streaming state. */
+const COMPLETION_FRAME_DELAY_MS = 30
+
 export async function startRagflowStub(port = 0): Promise<RagflowStub> {
   const uploads: StoredUpload[] = []
   const chunkMethodCalls: ChunkMethodCall[] = []
   const parseTriggers: string[] = []
+  const completionRequests: StoredCompletion[] = []
   const stub: RagflowStub = {
     url: '',
     uploads,
     chunkMethodCalls,
     parseTriggers,
+    completionRequests,
     failUploads: false,
     failDownloads: false,
     failDeletes: false,
     failParse: false,
     failChunkMethodPut: false,
     failList: false,
+    failCompletions: false,
     setRun: (id, run) => {
       const upload = uploads.find((u) => u.id === id)
       if (upload !== undefined) upload.run = run
@@ -84,6 +131,8 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     void handle(req, res)
   })
 
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
   async function handle(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const chunksMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/chunks$/)
@@ -91,6 +140,50 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     const fail = (code: number, message: string): void => {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ code, message }))
+    }
+
+    // Test observability: the recorded agent completion requests (used by the
+    // web e2e, where the stub runs in its own process).
+    if (url.pathname === '/__test/completions' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(completionRequests))
+      return
+    }
+
+    // Agent completion SSE (research #20 wire shape): POST
+    // /api/v1/agents/chat/completions with `{agent_id, query, stream: true,
+    // session_id?}`; when no session_id is sent, a session is auto-created
+    // and its id is carried in every frame. The stream is scripted to include
+    // <think> tags split across deltas and a message_end reference.
+    if (url.pathname === '/api/v1/agents/chat/completions' && req.method === 'POST') {
+      if (stub.failCompletions) return fail(500, 'simulated completion failure')
+      const body = JSON.parse((await readBody(req)) || '{}') as {
+        agent_id?: unknown
+        query?: unknown
+        stream?: unknown
+        session_id?: unknown
+      }
+      if (typeof body.query !== 'string') return fail(400, 'query required')
+      const agentId = typeof body.agent_id === 'string' ? body.agent_id : ''
+      const sentSessionId = typeof body.session_id === 'string' && body.session_id !== '' ? body.session_id : null
+      const streamedSessionId = sentSessionId ?? randomUUID()
+      completionRequests.push({ agentId, sessionId: sentSessionId, query: body.query, streamedSessionId })
+
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+      for (const delta of COMPLETION_DELTAS) {
+        res.write(`event: message\ndata: ${JSON.stringify({ code: 0, data: { session_id: streamedSessionId, content: delta } })}\n\n`)
+        await sleep(COMPLETION_FRAME_DELAY_MS)
+      }
+      res.write(
+        `event: message_end\ndata: ${JSON.stringify({
+          code: 0,
+          data: { session_id: streamedSessionId, reference: COMPLETION_REFERENCE },
+        })}\n\n`,
+      )
+      res.write(`event: node_finished\ndata: ${JSON.stringify({ code: 0, data: {} })}\n\n`)
+      res.write(`data: [DONE]\n\n`)
+      res.end()
+      return
     }
 
     if (url.pathname === '/health' && req.method === 'GET') {

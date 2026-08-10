@@ -47,3 +47,7 @@ _Avoid_: unpublish, retract
 **Document history**:
 The chronological record of a Document's status transitions — who moved it, from which status to which, when, and why (the note). Shown on the Document detail screen.
 _Avoid_: audit log, activity
+
+**Chat session**:
+An exchange between a User and the RagFlow agent, owned by that User and visible only to them. The app stores metadata only (our id, owner, the RagFlow session id, a title, timestamps) — messages are never stored; history is fetched live from RagFlow on demand. A session is created lazily on the User's first message and titled from it; its answer streams into the app token by token.
+_Avoid_: conversation, dialog

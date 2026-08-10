@@ -14,7 +14,7 @@ export class RagflowError extends Error {
  * page) is an upstream failure, not a crash: it surfaces as RagflowError so
  * the routes map it to 502, never a 500.
  */
-const parseUpstreamJson = async (upstream: Response): Promise<unknown> => {
+export const parseUpstreamJson = async (upstream: Response): Promise<unknown> => {
   try {
     return await upstream.json()
   } catch {
@@ -27,10 +27,23 @@ const parseUpstreamJson = async (upstream: Response): Promise<unknown> => {
  * (issue #14); a swallowed rejection makes the app pretend an upstream write
  * succeeded. Throws RagflowError unless the payload reports code 0.
  */
-const expectCodeZero = async (upstream: Response, rejected: string): Promise<void> => {
+export const expectCodeZero = async (upstream: Response, rejected: string): Promise<void> => {
   const payload = (await parseUpstreamJson(upstream)) as { code?: number }
   if (payload.code !== 0) {
     throw new RagflowError(rejected)
+  }
+}
+
+/**
+ * Wraps a fetch so network failures surface as RagflowError instead of raw
+ * TypeErrors (DNS/network failures would otherwise crash route handlers with
+ * a 500 instead of the upstream 502 envelope).
+ */
+export const guardedFetch = async (url: URL, init: RequestInit, authHeader: string): Promise<Response> => {
+  try {
+    return await fetch(url, { ...init, headers: { authorization: authHeader, ...init.headers } })
+  } catch (err) {
+    throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
   }
 }
 
@@ -101,15 +114,6 @@ export function createRagflowClient(config: Config): RagflowClient {
     new URL(`/api/v1/datasets/${config.ragflowDatasetId}/documents/${documentId}`, base)
   const chunksUrl = () => new URL(`/api/v1/datasets/${config.ragflowDatasetId}/chunks`, base)
 
-  /** Wraps a fetch so network failures surface as RagflowError. */
-  const guardedFetch = async (url: URL, init: RequestInit): Promise<Response> => {
-    try {
-      return await fetch(url, { ...init, headers: { authorization: authHeader, ...init.headers } })
-    } catch (err) {
-      throw new RagflowError(`RagFlow unreachable: ${(err as Error).message}`)
-    }
-  }
-
   return {
     async uploadDocument({ stream, filename, mimeType }) {
       const boundary = `----monitorerp-${randomBytes(16).toString('hex')}`
@@ -124,12 +128,16 @@ export function createRagflowClient(config: Config): RagflowClient {
         body.end()
       })
 
-      const upstream = await guardedFetch(documentsUrl(), {
-        method: 'POST',
-        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
-        body: body as unknown as NonNullable<RequestInit['body']>,
-        duplex: 'half',
-      })
+      const upstream = await guardedFetch(
+        documentsUrl(),
+        {
+          method: 'POST',
+          headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+          body: body as unknown as NonNullable<RequestInit['body']>,
+          duplex: 'half',
+        },
+        authHeader,
+      )
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow upload failed with status ${upstream.status}`, upstream.status)
       }
@@ -144,7 +152,7 @@ export function createRagflowClient(config: Config): RagflowClient {
     },
 
     async listDocuments() {
-      const upstream = await guardedFetch(documentsUrl(), { method: 'GET' })
+      const upstream = await guardedFetch(documentsUrl(), { method: 'GET' }, authHeader)
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow list failed with status ${upstream.status}`, upstream.status)
       }
@@ -167,16 +175,20 @@ export function createRagflowClient(config: Config): RagflowClient {
     },
 
     async downloadDocument(documentId) {
-      return await guardedFetch(documentUrl(documentId), { method: 'GET' })
+      return await guardedFetch(documentUrl(documentId), { method: 'GET' }, authHeader)
     },
 
     // A chunk_method PUT resets the document: parse data purged, file kept.
     async setChunkMethod(documentId, chunkMethod) {
-      const upstream = await guardedFetch(documentUrl(documentId), {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chunk_method: chunkMethod }),
-      })
+      const upstream = await guardedFetch(
+        documentUrl(documentId),
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ chunk_method: chunkMethod }),
+        },
+        authHeader,
+      )
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow chunk method update failed with status ${upstream.status}`, upstream.status)
       }
@@ -184,13 +196,17 @@ export function createRagflowClient(config: Config): RagflowClient {
     },
 
     async triggerParse(documentId) {
-      const upstream = await guardedFetch(chunksUrl(), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        // Real RagFlow's parse endpoint takes `document_ids` (plural, array)
-        // in the JSON body, NOT a `document_id` query param (issue #14).
-        body: JSON.stringify({ document_ids: [documentId] }),
-      })
+      const upstream = await guardedFetch(
+        chunksUrl(),
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          // Real RagFlow's parse endpoint takes `document_ids` (plural, array)
+          // in the JSON body, NOT a `document_id` query param (issue #14).
+          body: JSON.stringify({ document_ids: [documentId] }),
+        },
+        authHeader,
+      )
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow parse trigger failed with status ${upstream.status}`, upstream.status)
       }
@@ -203,11 +219,15 @@ export function createRagflowClient(config: Config): RagflowClient {
       // Real RagFlow deletes via the collection endpoint with `ids` in the
       // JSON body; DELETE on the single-document path answers 405 (verified
       // live while fixing issue #14).
-      const upstream = await guardedFetch(documentsUrl(), {
-        method: 'DELETE',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ids: [documentId] }),
-      })
+      const upstream = await guardedFetch(
+        documentsUrl(),
+        {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ids: [documentId] }),
+        },
+        authHeader,
+      )
       if (!upstream.ok) {
         throw new RagflowError(`RagFlow delete failed with status ${upstream.status}`, upstream.status)
       }

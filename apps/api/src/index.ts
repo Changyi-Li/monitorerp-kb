@@ -4,6 +4,7 @@ import { loadConfig } from './config.js'
 import { createDb } from './db/client.js'
 import { runMigrations } from './db/migrate.js'
 import { seedSuperAdmin } from './db/seed.js'
+import { createAgentClient } from './ragflow/agent.js'
 import { createRagflowClient } from './ragflow/client.js'
 import { startSweeper } from './sweeper.js'
 
@@ -25,7 +26,8 @@ const seeded = await seedSuperAdmin(db, {
 if (seeded) console.log(`Seeded super admin ${config.adminEmail}`)
 
 const ragflow = createRagflowClient(config)
-const app = createApp({ db, config, ragflow })
+const agent = createAgentClient(config)
+const app = createApp({ db, config, ragflow, agent })
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(`monitorerp-api listening on :${info.port}`)
 })

@@ -69,6 +69,26 @@ export const documents = pgTable(
   ],
 )
 
+// Metadata only — messages are never stored; history is fetched live from
+// RagFlow on demand (chatbot spec #23).
+export const chatSessions = pgTable(
+  'chat_sessions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    ragflowSessionId: text('ragflow_session_id').notNull().unique(),
+    title: text('title').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('chat_sessions_owner_id_idx').on(t.ownerId),
+    index('chat_sessions_owner_updated_idx').on(t.ownerId, sql`${t.updatedAt} desc`),
+  ],
+)
+
 export const documentHistory = pgTable(
   'document_history',
   {

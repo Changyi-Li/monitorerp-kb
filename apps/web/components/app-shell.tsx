@@ -1,6 +1,6 @@
 "use client"
 
-import { BookOpen, FileText, LogOut, Users } from "lucide-react"
+import { BookOpen, FileText, LogOut, MessageSquare, Users } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
   { href: "/", label: "Documents", icon: FileText },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/users", label: "Users", icon: Users, adminOnly: true },
 ] as const
 

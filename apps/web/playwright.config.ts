@@ -44,6 +44,7 @@ export default defineConfig({
         RAGFLOW_URL: 'http://127.0.0.1:9399',
         RAGFLOW_API_KEY: 'stub-key',
         RAGFLOW_DATASET_ID: 'e2e-dataset',
+        RAGFLOW_AGENT_ID: 'e2e-agent',
         POLL_INTERVAL_MS: '1000',
         PORT: '3001',
       },
