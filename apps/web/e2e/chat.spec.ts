@@ -11,6 +11,9 @@ const STUB_URL = 'http://127.0.0.1:9399'
  */
 const ANSWER = 'Leave is capped at 21 days per year 19. It resets every calendar year 41.'
 
+// The stub's scripted reasoning, streamed between start_to_think/end_to_think.
+const REASONING = 'The user asks about the leave policy. The policy states 21 days per year.'
+
 // Unique per run: the e2e database and the stub's request log persist across
 // runs when a dev reuses running servers (playwright's reuseExistingServer),
 // so fixed queries would collide with entries from earlier runs.
@@ -175,18 +178,42 @@ test.describe('chat', () => {
     await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
 
     // The reasoning pane is collapsed by default: its content is not rendered.
-    const reasoning = 'The user asks about the leave policy. The policy states 21 days per year.'
-    await expect(page.getByText(reasoning, { exact: false })).not.toBeVisible()
+    await expect(page.getByText(REASONING, { exact: false })).not.toBeVisible()
 
     const toggle = page.getByRole('button', { name: 'Show thinking' })
     await expect(toggle).toBeVisible()
     await toggle.click()
-    await expect(page.getByText(reasoning, { exact: false })).toBeVisible()
+    await expect(page.getByText(REASONING, { exact: false })).toBeVisible()
 
     // Toggling again collapses it.
     await page.getByRole('button', { name: 'Hide thinking' }).click()
-    await expect(page.getByText(reasoning, { exact: false })).not.toBeVisible()
+    await expect(page.getByText(REASONING, { exact: false })).not.toBeVisible()
     await expect(page.getByRole('button', { name: 'Show thinking' })).toBeVisible()
+  })
+
+  test('reasoning streams to the thinking pane before the answer completes (#33)', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    await composer.fill(Q1)
+    await page.getByRole('button', { name: 'Send message' }).click()
+
+    // The "Show thinking" toggle appears as soon as the FIRST reasoning delta
+    // reaches the browser. Issue #33's dev rewrite-proxy buffering held the
+    // whole SSE until completion, so the toggle would appear together with the
+    // full answer at the end. Observing the toggle here while the full answer
+    // is NOT yet rendered proves the stream is live (the streaming Route
+    // Handler, not the buffering rewrite).
+    const showThinking = page.getByRole('button', { name: 'Show thinking' })
+    await expect(showThinking).toBeVisible()
+    await expect(page.getByText(ANSWER, { exact: false })).not.toBeVisible()
+
+    // The reasoning is present mid-stream; expand it, then the answer finishes.
+    await showThinking.click()
+    await expect(page.getByText(REASONING, { exact: false })).toBeVisible()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
   })
 
   test('resuming a past session renders its full thread with citations', async ({ page }) => {
