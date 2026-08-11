@@ -2,7 +2,14 @@ import { Busboy } from '@fastify/busboy'
 import { randomUUID } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { realCompletionFrame } from './ragflow-wire.js'
+import {
+  COMPLETION_DONE_FRAME,
+  listPayload,
+  okPayload,
+  realCompletionFrame,
+  rejectionPayload,
+  uploadPayload,
+} from './ragflow-wire.js'
 
 export interface StoredUpload {
   id: string
@@ -211,7 +218,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     const docMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/documents(?:\/([^/]+))?$/)
     const fail = (code: number, message: string): void => {
       res.writeHead(code, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code, message }))
+      res.end(JSON.stringify(rejectionPayload(code, message)))
     }
 
     // Test observability: the recorded agent completion requests (used by the
@@ -231,17 +238,16 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const session = id !== null ? agentSessions.get(id) : undefined
       if (session === undefined) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: `Session not found: '${id ?? ''}'` }))
+        res.end(JSON.stringify(rejectionPayload(102, `Session not found: '${id ?? ''}'`)))
         return
       }
       res.writeHead(200, { 'content-type': 'application/json' })
       // REAL shape (bug #29 family): data wraps the session in a one-element
       // array — the old object shape made the client's unwrap dead code.
       res.end(
-        JSON.stringify({
-          code: 0,
-          data: [{ id: session.id, name: session.messages[0]?.content ?? session.id, message: session.messages }],
-        }),
+        JSON.stringify(
+          okPayload([{ id: session.id, name: session.messages[0]?.content ?? session.id, message: session.messages }]),
+        ),
       )
       return
     }
@@ -252,7 +258,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const ids = body.ids
       if (!Array.isArray(ids)) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: '`ids` is required' }))
+        res.end(JSON.stringify(rejectionPayload(102, '`ids` is required')))
         return
       }
       for (const id of ids) {
@@ -260,7 +266,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
         agentSessions.delete(String(id))
       }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code: 0 }))
+      res.end(JSON.stringify(okPayload()))
       return
     }
 
@@ -302,7 +308,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       }
       res.write(`${realCompletionFrame('message_end', { reference: COMPLETION_REFERENCE }, streamedSessionId)}\n\n`)
       res.write(`${realCompletionFrame('node_finished', {}, streamedSessionId)}\n\n`)
-      res.write(`data: [DONE]\n\n`)
+      res.write(`${COMPLETION_DONE_FRAME}\n\n`)
       // The answer is complete — now the session carries it (real RagFlow
       // persists the assistant message at generation end).
       session.messages.push({ role: 'assistant', content: STUB_ASSISTANT_CONTENT, reference: STORED_REFERENCE })
@@ -347,13 +353,13 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const ids = body.document_ids
       if (!Array.isArray(ids) || ids.length === 0) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: '`document_ids` is required' }))
+        res.end(JSON.stringify(rejectionPayload(102, '`document_ids` is required')))
         return
       }
       const documentId = ids[0] as string
       if (!uploads.some((u) => u.id === documentId)) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: `Documents not found: ['${documentId}']` }))
+        res.end(JSON.stringify(rejectionPayload(102, `Documents not found: ['${documentId}']`)))
         return
       }
       parseTriggers.push(documentId)
@@ -363,7 +369,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
         upload.progress = 0
       }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code: 0, data: { chunk_count: 0 } }))
+      res.end(JSON.stringify(okPayload({ chunk_count: 0 })))
       return
     }
 
@@ -374,10 +380,9 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       // from the list endpoint (verified live while diagnosing issue #14) —
       // the stub must not mask that shape with a bare array.
       res.end(
-        JSON.stringify({
-          code: 0,
-          data: {
-            docs: uploads.map((u) => ({
+        JSON.stringify(
+          listPayload(
+            uploads.map((u) => ({
               id: u.id,
               name: u.name,
               run: u.run,
@@ -386,9 +391,9 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
               progress_msg: u.progressMsg,
               chunk_method: u.chunkMethod,
             })),
-            total: uploads.length,
-          },
-        }),
+            uploads.length,
+          ),
+        ),
       )
       return
     }
@@ -418,10 +423,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       // a single-file upload (verified live against the cloud instance while
       // investigating issue #13) — the stub must not mask that shape.
       res.end(
-        JSON.stringify({
-          code: 0,
-          data: [{ id: stored.id, name: stored.name, size: stored.sizeBytes, chunk_count: 0, run: 'UNSTART' }],
-        }),
+        JSON.stringify(uploadPayload([{ id: stored.id, name: stored.name, size: stored.sizeBytes, chunk_count: 0, run: 'UNSTART' }])),
       )
       return
     }
@@ -442,7 +444,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       upload.progress = 0
       upload.progressMsg = null
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code: 0 }))
+      res.end(JSON.stringify(okPayload()))
       return
     }
 
@@ -464,7 +466,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       const ids = body.ids
       if (!Array.isArray(ids) || ids.length === 0) {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ code: 102, message: '`ids` is required' }))
+        res.end(JSON.stringify(rejectionPayload(102, '`ids` is required')))
         return
       }
       for (const id of ids) {
@@ -472,7 +474,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
         if (index !== -1) uploads.splice(index, 1)
       }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ code: 0 }))
+      res.end(JSON.stringify(okPayload()))
       return
     }
 
