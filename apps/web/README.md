@@ -38,6 +38,30 @@ administration with the last-admin guard; pending/deactivated sign-in
 refusal; theme persistence with the locked dark primary; empty states
 with a clear-filters action; and reduced-motion disabling animations.
 
+## Release gate: full-stack e2e against the real RagFlow (stage b)
+
+`npm run gate:e2e` (stage (b) of spec #28; own Playwright config
+`playwright.live.config.ts` — the daily `playwright.config.ts` and
+`npm run test:e2e` are untouched) drives the full stack against the **real**
+RagFlow instance: publish → real parse → `published` with `chunk_count > 0`;
+a chat stream completes with a non-empty answer whose terminal reference
+carries at least one chunk mapped to the published Document; session history
+round-trips; session and document deletion work. Assertions verify the
+pipeline only — never the model's wording, citation markers in the answer
+text, or parse timing.
+
+Same manual prerequisites and env contract as the API's gate stages (see
+`../api/readme.md`, "Release gate"): a dedicated test dataset and test agent
+in the RagFlow UI, and the four RagFlow env vars set. The stage
+preflight-wipes the test dataset, boots a fresh API against a truncated e2e
+database (it never reuses a stale stub-backed API), retries each test once
+on infrastructure failures, and fails loudly when misconfigured. Stop the
+daily e2e stack first — both configurations own ports 3000/3001.
+
+```bash
+RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate:e2e
+```
+
 ## Scripts
 
 | Script | What it does |
@@ -45,4 +69,5 @@ with a clear-filters action; and reduced-motion disabling animations.
 | `npm run dev` | Next dev server on :3000 |
 | `npm run build` / `npm start` | production build / serve |
 | `npm run lint` | ESLint |
-| `npm run test:e2e` | Playwright end-to-end suite |
+| `npm run test:e2e` | Playwright end-to-end suite (against the RagFlow stub) |
+| `npm run gate:e2e` | Stage (b) of the release gate — full-stack e2e against the real RagFlow instance (see above) |
