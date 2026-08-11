@@ -21,6 +21,7 @@ const RUN_TAG = `${Date.now()}`
 const Q1 = `Leave days ${RUN_TAG}`
 const Q2 = `Arrivals ${RUN_TAG}`
 const Q3 = `Withdraw ${RUN_TAG}`
+const Q4 = `Refetch ${RUN_TAG}`
 
 interface StoredCompletion {
   agentId: string
@@ -59,7 +60,7 @@ test.describe('chat', () => {
     await sendButton.click()
 
     // The composer is disabled while the answer streams (the stub streams in
-    // word-level deltas over ~300 ms, so the window is observable).
+    // word-level deltas over ~1.4 s, so the window is observable).
     await expect(sendButton).toBeDisabled()
 
     // The answer renders incrementally, then in full.
@@ -213,6 +214,31 @@ test.describe('chat', () => {
     // The reasoning is present mid-stream; expand it, then the answer finishes.
     await showThinking.click()
     await expect(page.getByText(REASONING, { exact: false })).toBeVisible()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+  })
+
+  test("a lazy new chat's streamed answer survives the mid-stream history refetch (#34)", async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    await composer.fill(Q4)
+    await page.getByRole('button', { name: 'Send message' }).click()
+
+    // The lazy session event pins the URL — which re-runs the mount effect and
+    // refetches the session's history. The stub now persists the assistant
+    // message only at stream end (like real RagFlow), so a mid-stream refetch
+    // returns history WITHOUT the answer. Issue #34: that response replaced
+    // the streaming thread, and the answer never survived.
+    await expect(page).toHaveURL(/\/chat\?s=/)
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    // The stream ends (composer re-enables once filled), past the window in
+    // which the mid-stream refetch would have landed — the streamed answer
+    // must still be on screen.
+    await composer.fill(Q4)
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
     await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
   })
 

@@ -53,6 +53,12 @@ export function ChatPage() {
   // The key of the thread the in-flight completion writes into ("new" until
   // the lazy session event re-homes it under the created session id).
   const threadKeyRef = useRef<string>("new");
+  // Mirrors `streaming` for effect guards: a ref, so a callback that runs
+  // between renders (the URL-change effect) reads the CURRENT value, not a
+  // stale closure. History must never be refetched while a stream is in
+  // flight — the lazy-session URL pin would replace the streaming thread
+  // with a mid-generation snapshot (issue #34).
+  const streamingRef = useRef(false);
   // Monotonic id of the newest history fetch: rapid session clicks must not
   // let an older fetch's settle (or its loading-clear) clobber a newer one.
   const historyRequestRef = useRef(0);
@@ -114,7 +120,11 @@ export function ChatPage() {
         const param = searchParams.get("s");
         const match = body.items.find((s) => s.id === param);
         setActiveId(match?.id ?? null);
-        if (match !== undefined) loadHistory(match.id);
+        // The lazy-creation `session` event re-pins the URL mid-stream; a
+        // history refetch then would replace the streaming thread with a
+        // snapshot taken before the answer was stored — the streamed answer
+        // would flash and vanish (issue #34).
+        if (match !== undefined && !streamingRef.current) loadHistory(match.id);
       })
       .catch(() => {
         if (!cancelled) setLoadError("Could not load chat sessions.");
@@ -195,6 +205,7 @@ export function ChatPage() {
       const trimmed = text.trim();
       if (trimmed === "" || streaming) return;
       setStreaming(true);
+      streamingRef.current = true;
       setError(null);
       threadKeyRef.current = activeId ?? "new";
 
@@ -259,6 +270,7 @@ export function ChatPage() {
       } finally {
         patchAssistant((m) => ({ ...m, streaming: false }));
         setStreaming(false);
+        streamingRef.current = false;
         refreshSessions();
       }
     },

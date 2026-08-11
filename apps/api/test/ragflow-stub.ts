@@ -152,8 +152,10 @@ const STORED_REFERENCE = [
   },
 ]
 
-/** Small per-frame delay so the web e2e can observe the streaming state. */
-const COMPLETION_FRAME_DELAY_MS = 30
+/** Per-frame delay so the web e2e can observe the streaming state. Kept
+ * slow enough (~1.4s total) that a mid-stream session-history refetch
+ * (issue #34) deterministically lands before the stream completes. */
+const COMPLETION_FRAME_DELAY_MS = 200
 
 export async function startRagflowStub(port = 0): Promise<RagflowStub> {
   const uploads: StoredUpload[] = []
@@ -286,11 +288,11 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       completionRequests.push({ agentId, sessionId: sentSessionId, query: body.query, streamedSessionId })
 
       // The session accumulates the exchange, mirroring RagFlow: the user
-      // message, then the full assistant message (think tags included) with
-      // the stored-history citation LIST shape.
+      // message is stored IMMEDIATELY, but the assistant message is persisted
+      // only when the stream completes (issue #34 — a history fetch made
+      // mid-generation returns the user message alone).
       const session = agentSessions.get(streamedSessionId) ?? { id: streamedSessionId, messages: [] }
       session.messages.push({ role: 'user', content: body.query, reference: null })
-      session.messages.push({ role: 'assistant', content: STUB_ASSISTANT_CONTENT, reference: STORED_REFERENCE })
       agentSessions.set(streamedSessionId, session)
 
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
@@ -301,6 +303,9 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       res.write(`${realCompletionFrame('message_end', { reference: COMPLETION_REFERENCE }, streamedSessionId)}\n\n`)
       res.write(`${realCompletionFrame('node_finished', {}, streamedSessionId)}\n\n`)
       res.write(`data: [DONE]\n\n`)
+      // The answer is complete — now the session carries it (real RagFlow
+      // persists the assistant message at generation end).
+      session.messages.push({ role: 'assistant', content: STUB_ASSISTANT_CONTENT, reference: STORED_REFERENCE })
       res.end()
       return
     }
