@@ -52,8 +52,10 @@ text, or parse timing.
 
 Same manual prerequisites and env contract as the API's gate stages (see
 `../api/readme.md`, "Release gate"): a dedicated test dataset and test agent
-in the RagFlow UI, and the four RagFlow env vars set. The stage
-preflight-wipes the test dataset, boots a fresh API against a truncated e2e
+in the RagFlow UI, and the four RagFlow env vars set. `npm run gate` from
+the API directory runs all three gate stages in order; this is its stage (b).
+The stage preflight-wipes the test dataset, boots a fresh API against a
+truncated e2e
 database (it never reuses a stale stub-backed API), retries each test once
 on infrastructure failures, and fails loudly when misconfigured. Stop the
 daily e2e stack first — both configurations own ports 3000/3001.

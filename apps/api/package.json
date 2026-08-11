@@ -17,7 +17,8 @@
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
     "gate:revalidation": "vitest run --config vitest.live.config.ts test/live/stub-revalidation.live.ts",
-    "gate:contract": "vitest run --config vitest.live.config.ts test/live/contract-tests.live.ts"
+    "gate:contract": "vitest run --config vitest.live.config.ts test/live/contract-tests.live.ts",
+    "gate": "npm run gate:revalidation && npm run gate:contract && npm --prefix ../web run gate:e2e"
   },
   "devDependencies": {
     "@types/node": "^25.7.0",

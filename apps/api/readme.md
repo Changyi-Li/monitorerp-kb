@@ -47,24 +47,45 @@ npm test             # vitest run
 npm run typecheck    # tsc over src + tests
 ```
 
-## Release gate: live RagFlow suites (stages c and a+)
+## Release gate (spec #28)
 
-The release gate's live suites (spec #28) run against the **real** RagFlow
-instance via one shared live vitest configuration (`vitest.live.config.ts`,
-opt-in and env-gated), one stage per script:
+The release gate validates the app against the **real** RagFlow instance,
+in three stages — **stub revalidation → contract tests → full-stack e2e** —
+so a wire-level problem is diagnosed before the slower stages run:
 
-- `npm run gate:revalidation` — stage (c): audits the RagFlow **stub's**
-  scripted wire expectations against the real wire — direct HTTP probes for
-  upload, list, parse trigger (stopped at `RUNNING`, never waited out),
-  delete, session get/delete, and one completion stream.
-- `npm run gate:contract` — stage (a+): drives the app's real RagFlow client
-  and agent client against the live instance — upload, list, download
-  (byte-for-byte), chunk-method flip, parse trigger, delete, session
-  fetch/delete, and the error surfaces (`code != 0` rejections map to
+- **Stage (c) — stub revalidation** (`npm run gate:revalidation`): audits the
+  RagFlow **stub's** scripted wire expectations against the real wire —
+  direct HTTP probes for upload, list, parse trigger (stopped at `RUNNING`,
+  never waited out), delete, session get/delete, and one completion stream.
+- **Stage (a+) — contract tests** (`npm run gate:contract`): drives the app's
+  real RagFlow client and agent client against the live instance — upload,
+  list, download (byte-for-byte), chunk-method flip, parse trigger, delete,
+  session fetch/delete, and the error surfaces (`code != 0` rejections map to
   `RagflowError`). A real parse runs to `DONE` with `chunk_count > 0` (short
   poll, multi-minute timeout), and a real completion stream is piped through
   the app's chat transform (think-tag stripping, event normalization,
   citation→Document mapping against the live reference shape).
+- **Stage (b) — full-stack e2e** (`npm --prefix ../web run gate:e2e`): the web
+  app against the real API and real RagFlow (full assertion list in
+  `../web/README.md`, "Release gate").
+
+**One headless command runs all three in order**, stopping at the first red
+stage; each stage also runs on its own, so a failed stage or a single
+diagnostic can be re-run without the whole gate (bash syntax — set the
+variables however your shell or CI does):
+
+```bash
+RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate
+```
+
+Runnable on their own (e.g. re-run stage (c) on demand after a RagFlow
+config or version change):
+
+```bash
+npm run gate:revalidation          # stage (c)
+npm run gate:contract              # stage (a+)
+npm --prefix ../web run gate:e2e   # stage (b)
+```
 
 The shared expectations module `test/ragflow-wire.ts` encodes the
 version-verified shapes in its documented expectations table and records the
@@ -72,27 +93,36 @@ RagFlow version validated (`RAGFLOW_VERSION_VALIDATED`); bump the constant
 and note the new version in the table after a successful run against a newer
 RagFlow.
 
-**Manual prerequisites** (one-time, in the RagFlow UI): a dedicated **test
-dataset** (embedder + chunk method configured) and a dedicated **test agent**
-(retrieval node + model) on the existing deployment — never the production
-collection. Point the gate at them with the same env vars the API reads:
+### Environment contract
 
-| Variable | For the gate |
+The gate reads the same four environment variables as the API:
+
+| Variable | What it points at |
 |---|---|
-| `RAGFLOW_URL` | The existing RagFlow deployment |
-| `RAGFLOW_API_KEY` | Its API key (stays server-side) |
-| `RAGFLOW_DATASET_ID` | The dedicated test dataset |
-| `RAGFLOW_AGENT_ID` | The dedicated test agent |
+| `RAGFLOW_URL` | The existing RagFlow deployment's base URL (e.g. `http://ragflow.internal:9380`) |
+| `RAGFLOW_API_KEY` | Its API key — server-side only, never committed |
+| `RAGFLOW_DATASET_ID` | The dedicated TEST dataset's id (RagFlow UI → Datasets → the dataset's id) |
+| `RAGFLOW_AGENT_ID` | The dedicated TEST agent's id (RagFlow UI → Agents → the agent's id) |
 
-```bash
-RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate:revalidation
-```
+**One-time manual setup** (a few minutes, in the RagFlow UI — never the
+production collection):
 
-Each stage fails loudly — never a silent skip — when the env vars are missing
-or the instance is unreachable. Both preflight-wipe the test dataset (deletes
-every document), retry infrastructure-style failures once before going red,
-and clean up after themselves on a best-effort basis. The daily suite
-(`npm test`) and its configuration are untouched.
+1. **Test dataset** — create a new dataset and, in its settings, configure an
+   **embedder** (embedding model) and a **chunk method** (e.g. Naive) —
+   parsing needs both.
+2. **Test agent** — create a new agent, add a **Retrieval** node pointing at
+   the test dataset, and select the **model** in the agent's settings.
+3. Copy the dataset and agent ids from their pages into the variables above.
+
+The gate is CI-ready by construction: one headless command, no manual steps
+beyond the one-time setup, loud failure with guidance when misconfigured
+(missing vars or an unreachable instance red the first stage — never a
+silent skip), and no new infrastructure — the existing compose Postgres and
+the real RagFlow instance. Every stage preflight-wipes the test dataset
+(deletes every document), retries infrastructure-style failures once before
+going red, and cleans up after itself on a best-effort basis. The daily
+suites (`npm test` here; `npm run test:e2e` in the web app) and their
+configurations are untouched.
 
 ## Schema changes
 
@@ -113,3 +143,4 @@ Then re-run the tests; the test database is migrated automatically.
 | `npm run db:generate` | drizzle-kit generate |
 | `npm run gate:revalidation` | Stage (c) of the release gate — audits the stub's wire expectations against the real RagFlow instance (see above) |
 | `npm run gate:contract` | Stage (a+) of the release gate — drives the app's real RagFlow/agent clients against the live instance (see above) |
+| `npm run gate` | The whole release gate — revalidation → contract → full-stack e2e, stopping at the first red stage (see above) |
