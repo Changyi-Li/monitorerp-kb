@@ -137,6 +137,37 @@ const STUB_ASSISTANT_CONTENT =
   '<think>The user asks about the leave policy. The policy states 21 days per year.\n</think>' +
   'Leave is capped at 21 days per year [ID:19]. It resets every calendar year [ID:41].'
 
+// MARKDOWN variant (issue #39): a completion whose query starts with
+// "Markdown " answers in markdown shape, mirroring the real agent's output
+// (captured live 2026-08-11): bold, an ### heading, an ordered list, a ---
+// rule, real newlines, and [ID:n] markers. The web chat must render this as
+// markdown — headings/lists/bold — not as literal syntax. Same citation ids
+// as the plain answer, so the chips map to the same sources.
+const MARKDOWN_COMPLETION_DELTAS: ReadonlyArray<Record<string, unknown>> = [
+  { content: '', start_to_think: true },
+  { content: 'The user asks about the leave policy.' },
+  { content: ' The policy states 21 days per year.\n' },
+  { content: '', end_to_think: true },
+  { content: 'Leave is capped at **21 days** per year [ID:19].\n\n' },
+  { content: '### Leave policy\n\n' },
+  { content: 'The policy resets every calendar year.\n\n' },
+  { content: '1. **First**: ask HR [ID:19].\n' },
+  { content: '2. **Second**: submit the form [ID:41].\n\n' },
+  { content: '---\n\nSee the handbook for details [ID:41].' },
+]
+
+// The stored-history twin of the markdown answer (think tags inline, exactly
+// as RagFlow stores them — the history path splits them off, issue #32).
+const MARKDOWN_STORED_CONTENT =
+  '<think>The user asks about the leave policy. The policy states 21 days per year.\n</think>' +
+  'Leave is capped at **21 days** per year [ID:19].\n\n' +
+  '### Leave policy\n\n' +
+  'The policy resets every calendar year.\n\n' +
+  '1. **First**: ask HR [ID:19].\n' +
+  '2. **Second**: submit the form [ID:41].\n\n' +
+  '---\n\n' +
+  'See the handbook for details [ID:41].'
+
 // Stored-history citation LIST shape (research #20) on the REAL wire: each
 // item's `citation_id` is the same arbitrary integer the [ID:n] markers use —
 // never list order (issue #30).
@@ -301,8 +332,14 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       session.messages.push({ role: 'user', content: body.query, reference: null })
       agentSessions.set(streamedSessionId, session)
 
+      // Issue #39: queries starting with "Markdown " get the markdown-shaped
+      // answer (live stream deltas and the stored-history twin).
+      const isMarkdownQuery = body.query.startsWith('Markdown ')
+      const deltas = isMarkdownQuery ? MARKDOWN_COMPLETION_DELTAS : COMPLETION_DELTAS
+      const storedContent = isMarkdownQuery ? MARKDOWN_STORED_CONTENT : STUB_ASSISTANT_CONTENT
+
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-      for (const data of COMPLETION_DELTAS) {
+      for (const data of deltas) {
         res.write(`${realCompletionFrame('message', data, streamedSessionId)}\n\n`)
         await sleep(COMPLETION_FRAME_DELAY_MS)
       }
@@ -311,7 +348,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       res.write(`${COMPLETION_DONE_FRAME}\n\n`)
       // The answer is complete — now the session carries it (real RagFlow
       // persists the assistant message at generation end).
-      session.messages.push({ role: 'assistant', content: STUB_ASSISTANT_CONTENT, reference: STORED_REFERENCE })
+      session.messages.push({ role: 'assistant', content: storedContent, reference: STORED_REFERENCE })
       res.end()
       return
     }

@@ -279,6 +279,61 @@ test.describe('chat', () => {
     await expect(page.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
   })
 
+  test('a markdown answer renders as markdown, not raw syntax (#39)', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    await composer.fill(`Markdown ${RUN_TAG}`)
+    await page.getByRole('button', { name: 'Send message' }).click()
+
+    const bubble = page.locator('div.text-sm.leading-relaxed')
+    // Bold renders as <strong> — the raw ** syntax must not be visible.
+    await expect(bubble.getByText('21 days', { exact: true })).toBeVisible()
+    await expect(bubble).not.toContainText('**')
+    // The heading renders as a heading element, not literal `###` text.
+    await expect(bubble.getByRole('heading', { level: 3, name: 'Leave policy' })).toBeVisible()
+    await expect(bubble).not.toContainText('###')
+    // The ordered list renders as list items, not literal `1.` `2.`.
+    await expect(bubble.locator('ol li')).toHaveCount(2)
+    await expect(bubble).not.toContainText('1. **First**')
+    // The rule renders as <hr>, not literal `---` text.
+    await expect(bubble.locator('hr')).toHaveCount(1)
+    await expect(bubble).not.toContainText('---')
+    // Citation chips still render and open source cards. The answer cites
+    // [19] twice (paragraph + list item), so scope to the first.
+    const chip = page.getByRole('button', { name: 'Source 19: Leave Policy.md' }).first()
+    await expect(chip).toBeVisible()
+    await chip.click()
+    await expect(page.getByText('Leave is capped at 21 days per year.', { exact: false })).toBeVisible()
+  })
+
+  test('a resumed session renders its markdown answer as markdown (#39)', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    const query = `Markdown resume ${RUN_TAG}`
+    await composer.fill(query)
+    await page.getByRole('button', { name: 'Send message' }).click()
+    // Wait for the LAST answer segment: the stub persists the assistant
+    // message only at stream end, and the reload's history fetch must land
+    // after that (same pattern as the plain resume test).
+    await expect(page.getByText('See the handbook for details', { exact: false })).toBeVisible()
+
+    // Reload: the pinned ?s= URL deep-links into the stored history, which
+    // carries the same markdown (think tags split off, [ID:n] rewritten).
+    await page.reload()
+    const bubble = page.locator('div.text-sm.leading-relaxed')
+    await expect(bubble.getByRole('heading', { level: 3, name: 'Leave policy' })).toBeVisible()
+    await expect(bubble.getByText('21 days', { exact: true })).toBeVisible()
+    await expect(bubble).not.toContainText('**')
+    await expect(bubble.locator('ol li')).toHaveCount(2)
+    await expect(bubble.locator('hr')).toHaveCount(1)
+  })
+
   test('deleting a session removes it from the sidebar after confirm', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     await page.getByRole('link', { name: 'Chat' }).click()

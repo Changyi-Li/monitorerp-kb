@@ -3,7 +3,9 @@
 import { ChevronDown, ExternalLink, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -477,7 +479,25 @@ function ThinkingPane({ thinking, streaming }: { thinking?: string; streaming?: 
   );
 }
 
-/** Renders inline [n] markers as clickable chips; unmatched markers are inert. */
+/**
+ * react-markdown v10 passes `node` (the hast element) to every component
+ * unconditionally (passNode is hardcoded on). Strip it so it can never
+ * spread onto a DOM element (issue #39).
+ */
+const stripNode = <P extends { node?: unknown }>(props: P): Omit<P, "node"> => {
+  const { node: _node, ...rest } = props;
+  void _node;
+  return rest;
+};
+
+/**
+ * Renders the agent's answer as markdown (issue #39) — RagFlow's agent
+ * answers in markdown (headings, bold, lists, rules), and the pre-fix
+ * renderer showed the raw syntax as literal text. A bare [n] citation marker
+ * has no link-reference definition, so CommonMark keeps it as literal text;
+ * walkMarkers then turns those text nodes back into the clickable chips,
+ * wherever they land (paragraph, list item, …). Unmatched markers are inert.
+ */
 function AnswerWithCitations({
   content,
   citations,
@@ -488,33 +508,104 @@ function AnswerWithCitations({
   onCite: (n: number) => void;
 }) {
   const byOrdinal = new Map((citations ?? []).map((c) => [c.n, c]));
-  const parts = content.split(/(\[\d+\])/g);
-  return (
-    <>
-      {parts.map((part, idx) => {
+
+  const chip = (n: number, key: string | number) => {
+    const cite = byOrdinal.get(n);
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={() => onCite(n)}
+        disabled={cite === undefined}
+        aria-label={cite !== undefined ? `Source ${n}: ${cite.document_name}` : `Source ${n}`}
+        className={cn(
+          "mx-0.5 inline-flex h-4 min-w-4 -translate-y-1.5 items-center justify-center rounded-full px-1 align-baseline text-[10px] font-semibold tabular-nums transition-colors",
+          cite !== undefined
+            ? "bg-primary/15 text-primary hover:bg-primary hover:text-primary-foreground"
+            : "bg-muted text-muted-foreground",
+        )}
+      >
+        {n}
+      </button>
+    );
+  };
+
+  // Splits [n] markers out of a parsed element's children — text nodes become
+  // chips in place, without disturbing the elements around them (issue #39).
+  // Applied to every text-capable markdown element below, so a marker lands as
+  // a chip wherever the agent put it (paragraph, list item, heading, …).
+  const walkMarkers = (node: ReactNode): ReactNode => {
+    if (typeof node === "string") {
+      const parts = node.split(/(\[\d+\])/g);
+      if (parts.length === 1) return node;
+      return parts.map((part, idx) => {
         const match = /^\[(\d+)\]$/.exec(part);
-        if (match === null) return <span key={idx}>{part}</span>;
-        const n = Number(match[1]);
-        const cite = byOrdinal.get(n);
-        return (
-          <button
-            key={idx}
-            type="button"
-            onClick={() => onCite(n)}
-            disabled={cite === undefined}
-            aria-label={cite !== undefined ? `Source ${n}: ${cite.document_name}` : `Source ${n}`}
-            className={cn(
-              "mx-0.5 inline-flex h-4 min-w-4 -translate-y-1.5 items-center justify-center rounded-full px-1 align-baseline text-[10px] font-semibold tabular-nums transition-colors",
-              cite !== undefined
-                ? "bg-primary/15 text-primary hover:bg-primary hover:text-primary-foreground"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            {n}
-          </button>
-        );
-      })}
-    </>
+        return match === null ? part : chip(Number(match[1]), idx);
+      });
+    }
+    if (Array.isArray(node)) return node.map(walkMarkers);
+    if (isValidElement<{ children?: ReactNode }>(node) && node.props.children !== undefined) {
+      return cloneElement(node, { children: walkMarkers(node.props.children) });
+    }
+    return node;
+  };
+
+  // Element styles for the rendered markdown, with children routed through
+  // walkMarkers (react-markdown's children prop must stay a raw string, so
+  // the walk happens on each component's PARSED children instead). Links are
+  // the exception: a chip inside an anchor would be invalid DOM nesting, so
+  // a marker in link text stays literal.
+  const components: Components = {
+    p: (props) => <p className="my-2 first:mt-0" {...stripNode(props)}>{walkMarkers(props.children)}</p>,
+    h1: (props) => <h1 className="mb-2 mt-3 text-lg font-semibold" {...stripNode(props)}>{walkMarkers(props.children)}</h1>,
+    h2: (props) => <h2 className="mb-2 mt-3 text-base font-semibold" {...stripNode(props)}>{walkMarkers(props.children)}</h2>,
+    h3: (props) => <h3 className="mb-1.5 mt-3 text-sm font-semibold" {...stripNode(props)}>{walkMarkers(props.children)}</h3>,
+    h4: (props) => <h4 className="mb-1.5 mt-3 text-sm font-medium" {...stripNode(props)}>{walkMarkers(props.children)}</h4>,
+    h5: (props) => <h5 className="mb-1.5 mt-3 text-sm font-medium" {...stripNode(props)}>{walkMarkers(props.children)}</h5>,
+    h6: (props) => <h6 className="mb-1.5 mt-3 text-sm font-medium" {...stripNode(props)}>{walkMarkers(props.children)}</h6>,
+    ul: (props) => <ul className="my-2 list-disc space-y-1 pl-5" {...stripNode(props)}>{walkMarkers(props.children)}</ul>,
+    ol: (props) => <ol className="my-2 list-decimal space-y-1 pl-5" {...stripNode(props)}>{walkMarkers(props.children)}</ol>,
+    li: (props) => <li className="leading-relaxed" {...stripNode(props)}>{walkMarkers(props.children)}</li>,
+    strong: (props) => <strong className="font-semibold" {...stripNode(props)}>{walkMarkers(props.children)}</strong>,
+    em: (props) => <em className="italic" {...stripNode(props)}>{walkMarkers(props.children)}</em>,
+    // No marker walk in links: a chip inside an anchor would be invalid DOM
+    // nesting, so a marker in link text stays literal.
+    a: (props) => (
+      <a
+        className="font-medium text-primary underline hover:underline-offset-2"
+        target="_blank"
+        rel="noreferrer"
+        {...stripNode(props)}
+      >
+        {props.children}
+      </a>
+    ),
+    del: (props) => <del {...stripNode(props)}>{walkMarkers(props.children)}</del>,
+    s: (props) => <s {...stripNode(props)}>{walkMarkers(props.children)}</s>,
+    u: (props) => <u {...stripNode(props)}>{walkMarkers(props.children)}</u>,
+    sup: (props) => <sup {...stripNode(props)}>{walkMarkers(props.children)}</sup>,
+    sub: (props) => <sub {...stripNode(props)}>{walkMarkers(props.children)}</sub>,
+    code: (props) => <code className="rounded bg-muted px-1 py-0.5 text-[0.9em]" {...stripNode(props)}>{walkMarkers(props.children)}</code>,
+    pre: (props) => (
+      <pre className="my-2 overflow-x-auto rounded-lg bg-muted/40 p-3 text-xs leading-relaxed" {...stripNode(props)}>
+        {walkMarkers(props.children)}
+      </pre>
+    ),
+    blockquote: (props) => (
+      <blockquote className="my-2 border-l-2 pl-3 text-muted-foreground" {...stripNode(props)}>
+        {walkMarkers(props.children)}
+      </blockquote>
+    ),
+    hr: (props) => <hr className="my-3 border-muted" {...stripNode(props)} />,
+    table: (props) => <table className="my-2 w-full text-sm" {...stripNode(props)}>{walkMarkers(props.children)}</table>,
+    th: (props) => <th className="border-b px-2 py-1 text-left font-medium" {...stripNode(props)}>{walkMarkers(props.children)}</th>,
+    td: (props) => <td className="border-b px-2 py-1" {...stripNode(props)}>{walkMarkers(props.children)}</td>,
+  };
+
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      {content}
+    </ReactMarkdown>
   );
 }
 
