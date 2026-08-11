@@ -12,9 +12,9 @@ import { wipeTestDataset } from './ragflow-http.js'
 export default async function globalSetup(): Promise<void> {
   const env = loadLiveEnv()
   console.log(
-    `[revalidation] auditing the ${RAGFLOW_VERSION_VALIDATED}-verified expectations table ` +
-      `against the live instance at ${env.ragflowUrl}`,
+    `[gate] auditing the ${RAGFLOW_VERSION_VALIDATED}-verified expectations against ` +
+      `the live instance at ${env.ragflowUrl}`,
   )
   await wipeTestDataset()
-  console.log('[revalidation] preflight wipe complete — test dataset is empty')
+  console.log('[gate] preflight wipe complete — test dataset is empty')
 }

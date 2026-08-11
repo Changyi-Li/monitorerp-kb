@@ -47,17 +47,30 @@ npm test             # vitest run
 npm run typecheck    # tsc over src + tests
 ```
 
-## Release gate: live RagFlow revalidation (stage c)
+## Release gate: live RagFlow suites (stages c and a+)
 
-The release gate's first stage (`npm run gate:revalidation`, stage (c) of
-spec #28) audits the RagFlow **stub's** scripted wire expectations against the
-**real** instance — direct HTTP probes for upload, list, parse trigger
-(stopped at `RUNNING`, never waited out), delete, session get/delete, and one
-completion stream. The shared expectations module `test/ragflow-wire.ts`
-encodes the version-verified shapes in its documented expectations table and
-records the RagFlow version validated (`RAGFLOW_VERSION_VALIDATED`); bump the
-constant and note the new version in the table after a successful run against
-a newer RagFlow.
+The release gate's live suites (spec #28) run against the **real** RagFlow
+instance via one shared live vitest configuration (`vitest.live.config.ts`,
+opt-in and env-gated), one stage per script:
+
+- `npm run gate:revalidation` — stage (c): audits the RagFlow **stub's**
+  scripted wire expectations against the real wire — direct HTTP probes for
+  upload, list, parse trigger (stopped at `RUNNING`, never waited out),
+  delete, session get/delete, and one completion stream.
+- `npm run gate:contract` — stage (a+): drives the app's real RagFlow client
+  and agent client against the live instance — upload, list, download
+  (byte-for-byte), chunk-method flip, parse trigger, delete, session
+  fetch/delete, and the error surfaces (`code != 0` rejections map to
+  `RagflowError`). A real parse runs to `DONE` with `chunk_count > 0` (short
+  poll, multi-minute timeout), and a real completion stream is piped through
+  the app's chat transform (think-tag stripping, event normalization,
+  citation→Document mapping against the live reference shape).
+
+The shared expectations module `test/ragflow-wire.ts` encodes the
+version-verified shapes in its documented expectations table and records the
+RagFlow version validated (`RAGFLOW_VERSION_VALIDATED`); bump the constant
+and note the new version in the table after a successful run against a newer
+RagFlow.
 
 **Manual prerequisites** (one-time, in the RagFlow UI): a dedicated **test
 dataset** (embedder + chunk method configured) and a dedicated **test agent**
@@ -75,10 +88,10 @@ collection. Point the gate at them with the same env vars the API reads:
 RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate:revalidation
 ```
 
-The stage fails loudly — never a silent skip — when the env vars are missing
-or the instance is unreachable. It preflight-wipes the test dataset (deletes
-every document), retries infrastructure-style failures once before going red,
-and cleans up after itself on a best-effort basis. The daily suite
+Each stage fails loudly — never a silent skip — when the env vars are missing
+or the instance is unreachable. Both preflight-wipe the test dataset (deletes
+every document), retry infrastructure-style failures once before going red,
+and clean up after themselves on a best-effort basis. The daily suite
 (`npm test`) and its configuration are untouched.
 
 ## Schema changes
@@ -99,3 +112,4 @@ Then re-run the tests; the test database is migrated automatically.
 | `npm run build` / `npm start` | compile with `tsc` and serve `dist/` |
 | `npm run db:generate` | drizzle-kit generate |
 | `npm run gate:revalidation` | Stage (c) of the release gate — audits the stub's wire expectations against the real RagFlow instance (see above) |
+| `npm run gate:contract` | Stage (a+) of the release gate — drives the app's real RagFlow/agent clients against the live instance (see above) |

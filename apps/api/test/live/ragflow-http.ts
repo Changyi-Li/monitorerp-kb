@@ -31,18 +31,32 @@ const liveEnv = loadLiveEnv()
 
 const authHeader = `Bearer ${liveEnv.ragflowApiKey}`
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-const isInfraFailure = (err: LiveUpstreamError): boolean => err.status === undefined || err.status >= 500
+/**
+ * An error is infrastructure when it carries no status (network failures,
+ * unparseable payloads, and the client's no-status rejection errors read as
+ * such — a deterministic rejection is harmlessly retried once and fails
+ * again) or a 5xx status. 4xx and shape mismatches never retry.
+ */
+const isInfraFailure = (err: unknown): boolean => {
+  if (typeof err !== 'object' || err === null) return false
+  const status = (err as { status?: unknown }).status
+  return typeof status !== 'number' || status >= 500
+}
 
 /** One retry on infrastructure-style failures before the stage goes red —
- * never on protocol errors or shape mismatches. */
+ * never on protocol errors or shape mismatches. Shared by the revalidation
+ * and contract stages (it classifies the production client's RagflowError
+ * the same way as this module's LiveUpstreamError). Error-path PROBES that
+ * assert deterministic rejections should call the client directly — a
+ * rejection carries no status and would be retried once for nothing. */
 export async function withInfraRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn()
   } catch (err) {
-    if (!(err instanceof LiveUpstreamError) || !isInfraFailure(err)) throw err
-    console.warn(`[revalidation] ${label}: transient upstream failure (${err.message}); retrying once`)
+    if (!isInfraFailure(err)) throw err
+    console.warn(`[gate] ${label}: transient upstream failure (${(err as Error).message}); retrying once`)
     await sleep(1500)
     return await fn()
   }
