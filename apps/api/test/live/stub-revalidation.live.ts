@@ -7,6 +7,7 @@ import {
   fetchSession,
   listDocsOf,
   listDocuments,
+  sleep,
   triggerParse,
   uploadDocument,
 } from './ragflow-http.js'
@@ -36,8 +37,6 @@ const parseSseDataLines = (body: string): string[] =>
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice('data:'.length).trimStart())
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-
 describe('stage (c): stub revalidation against the real RagFlow instance', () => {
   // State threaded through the ordered probes (upload → list → parse →
   // stream → sessions → delete). A retried probe may create extras; cleanup
@@ -55,14 +54,14 @@ describe('stage (c): stub revalidation against the real RagFlow instance', () =>
       try {
         await deleteDocuments([id])
       } catch (err) {
-        console.warn(`[revalidation] cleanup: deleting document ${id} failed — ${(err as Error).message}`)
+        console.warn(`[gate] cleanup: deleting document ${id} failed — ${(err as Error).message}`)
       }
     }
     for (const id of createdSessionIds) {
       try {
         await deleteSession(id)
       } catch (err) {
-        console.warn(`[revalidation] cleanup: deleting session ${id} failed — ${(err as Error).message}`)
+        console.warn(`[gate] cleanup: deleting session ${id} failed — ${(err as Error).message}`)
       }
     }
   })
