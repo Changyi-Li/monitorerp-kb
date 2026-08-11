@@ -70,7 +70,7 @@ test.describe('stage (b): full-stack e2e against the real RagFlow instance', () 
   test.afterAll(async () => {
     // Best-effort cleanup of what THIS run created — a cleanup failure never
     // reddens the stage (spec #28; orphaned sessions are tolerated).
-    const base = 'http://localhost:3000'
+    const base = 'http://localhost:4800'
     try {
       const signInRes = await fetch(`${base}/api/auth/sign-in`, {
         method: 'POST',

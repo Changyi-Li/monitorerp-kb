@@ -35,7 +35,7 @@ export default defineConfig({
   reporter: [['list']],
   globalSetup: './e2e/live-global-setup.ts',
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://localhost:4800',
     trace: 'retain-on-failure',
   },
   webServer: [
@@ -43,10 +43,10 @@ export default defineConfig({
       // The API targets the REAL instance. The database bootstrap (ensure +
       // truncate — the daily stub server's clean-slate job) runs first, and a
       // fresh API is booted every run: reuseExistingServer false means a
-      // stale stub-backed API on :3001 fails the run loudly instead of being
+      // stale stub-backed API on :4801 fails the run loudly instead of being
       // reused silently. Stop the daily e2e stack before running this.
       command: 'npx tsx e2e/boot-with-e2e-database.ts',
-      url: 'http://127.0.0.1:3001/health',
+      url: 'http://127.0.0.1:4801/health',
       reuseExistingServer: false,
       timeout: 60_000,
       cwd: '../api',
@@ -62,15 +62,15 @@ export default defineConfig({
         RAGFLOW_DATASET_ID: liveEnv.ragflowDatasetId,
         RAGFLOW_AGENT_ID: liveEnv.ragflowAgentId,
         POLL_INTERVAL_MS: '1000',
-        PORT: '3001',
+        PORT: '4801',
       },
     },
     {
-      // The web dev server proxies to whatever API is on :3001 — the fresh
+      // The web dev server proxies to whatever API is on :4801 — the fresh
       // one this run booted. Reuse is safe here and avoids a slow Next
       // rebuild.
-      command: 'npx next dev -p 3000',
-      url: 'http://localhost:3000/auth/sign-in',
+      command: 'npx next dev -p 4800',
+      url: 'http://localhost:4800/auth/sign-in',
       reuseExistingServer: true,
       timeout: 120_000,
     },

@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const API_ORIGIN = process.env.API_ORIGIN ?? "http://localhost:3001";
+const API_ORIGIN = process.env.API_ORIGIN ?? "http://localhost:4801";
 
 const nextConfig: NextConfig = {
   // Same-origin API: the browser talks to /api/* and this proxies to the Hono

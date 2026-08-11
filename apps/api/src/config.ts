@@ -29,6 +29,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ragflowDatasetId: required('RAGFLOW_DATASET_ID'),
     ragflowAgentId: required('RAGFLOW_AGENT_ID'),
     pollIntervalMs: env['POLL_INTERVAL_MS'] ? Number(env['POLL_INTERVAL_MS']) : 5000,
-    port: env['PORT'] ? Number(env['PORT']) : 3001,
+    port: env['PORT'] ? Number(env['PORT']) : 4801,
   }
 }

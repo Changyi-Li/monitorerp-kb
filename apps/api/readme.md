@@ -10,7 +10,7 @@ docker compose up -d
 
 # 2. Install and run
 npm install
-npm run dev          # tsx watch, defaults to :3001
+npm run dev          # tsx watch, defaults to :4801
 ```
 
 The first boot applies committed migrations and, when the `users` table is
@@ -33,7 +33,7 @@ or outbox — explicitly out of scope for v1.
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` | First-boot super admin seed |
 | `RAGFLOW_URL` / `RAGFLOW_API_KEY` / `RAGFLOW_DATASET_ID` / `RAGFLOW_AGENT_ID` | RagFlow connection (file store); dataset and agent ids from the RagFlow UI |
 | `POLL_INTERVAL_MS` | Sweeper poll interval (default 5000) — reconciles publishing documents with RagFlow's parse state |
-| `PORT` | HTTP port (default 3001) |
+| `PORT` | HTTP port (default 4801) |
 
 ## Tests
 

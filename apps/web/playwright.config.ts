@@ -16,7 +16,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://localhost:4800',
     trace: 'retain-on-failure',
   },
   webServer: [
@@ -31,7 +31,7 @@ export default defineConfig({
     },
     {
       command: 'npx tsx src/index.ts',
-      url: 'http://127.0.0.1:3001/health',
+      url: 'http://127.0.0.1:4801/health',
       reuseExistingServer: !process.env['CI'],
       timeout: 60_000,
       cwd: API_DIR,
@@ -46,12 +46,12 @@ export default defineConfig({
         RAGFLOW_DATASET_ID: 'e2e-dataset',
         RAGFLOW_AGENT_ID: 'e2e-agent',
         POLL_INTERVAL_MS: '1000',
-        PORT: '3001',
+        PORT: '4801',
       },
     },
     {
-      command: 'npx next dev -p 3000',
-      url: 'http://localhost:3000/auth/sign-in',
+      command: 'npx next dev -p 4800',
+      url: 'http://localhost:4800/auth/sign-in',
       reuseExistingServer: !process.env['CI'],
       timeout: 120_000,
     },

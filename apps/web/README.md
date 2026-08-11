@@ -9,11 +9,11 @@ to `/api/*` on this origin; `next.config.ts` proxies it to the Hono API
 ```bash
 # 1. Postgres (from the repo root) and the API
 docker compose up -d
-cd ../api && npm install && npm run dev   # API on :3001
+cd ../api && npm install && npm run dev   # API on :4801
 
 # 2. This app
 npm install
-npm run dev                                # web on :3000
+npm run dev                                # web on :4800
 ```
 
 The dataset display name is config-driven via `NEXT_PUBLIC_DATASET_NAME`
@@ -58,7 +58,7 @@ The stage preflight-wipes the test dataset, boots a fresh API against a
 truncated e2e
 database (it never reuses a stale stub-backed API), retries each test once
 on infrastructure failures, and fails loudly when misconfigured. Stop the
-daily e2e stack first — both configurations own ports 3000/3001.
+daily e2e stack first — both configurations own ports 4800/4801.
 
 ```bash
 RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate:e2e
@@ -68,7 +68,7 @@ RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... 
 
 | Script | What it does |
 |---|---|
-| `npm run dev` | Next dev server on :3000 |
+| `npm run dev` | Next dev server on :4800 |
 | `npm run build` / `npm start` | production build / serve |
 | `npm run lint` | ESLint |
 | `npm run test:e2e` | Playwright end-to-end suite (against the RagFlow stub) |

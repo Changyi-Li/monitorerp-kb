@@ -12,7 +12,7 @@ import type { NextRequest } from 'next/server'
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-const API_ORIGIN = process.env.API_ORIGIN ?? 'http://localhost:3001'
+const API_ORIGIN = process.env.API_ORIGIN ?? 'http://localhost:4801'
 
 export async function POST(req: NextRequest): Promise<Response> {
   // Intentionally a narrow allowlist, not a full proxy: this endpoint needs
