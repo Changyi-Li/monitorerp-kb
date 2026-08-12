@@ -1,0 +1,81 @@
+# Smoke harness (issue #45): boot the locally built production images under
+# the deployment env shape and assert the health chain, in order — API health
+# endpoint, web sign-in page, one request through the web→api rewrite.
+#
+#   docker compose up -d --wait   # dev Postgres first (the DB server)
+#   bash smoke/smoke.sh           # fresh smoke DB, stub, build, boot, assert
+#
+# The environment mirrors the deployment contract (the deploy repo's kb
+# stack): the API reaches Postgres and RagFlow through host.docker.internal
+# (host-gateway — the same pattern the server uses), the web's API origin is
+# the internal compose service name "api" (never a host path), and both ports
+# are the contract ports. The intentional duplication is the point: a
+# contract change that updates one side and forgets this file reds the
+# harness loudly on the sides the harness exercises — the database URL, the
+# web's API origin, the contract ports. (The RagFlow leg is a shape mirror
+# only: the API validates the vars at boot but never dials RagFlow for the
+# smoke's assertions — see smoke/smoke.sh.)
+#
+# One deliberate deviation from the deployment: the API publishes
+# 127.0.0.1:4801 here so the harness can probe its health endpoint directly.
+# On the server the API has zero published ports — only the web is exposed.
+#
+# SMOKE_API_IMAGE / SMOKE_WEB_IMAGE override the images (the harness then
+# skips building that service) — used to verify a deliberately broken image
+# reds the harness.
+name: monitorerp-kb-smoke
+
+services:
+  api:
+    image: ${SMOKE_API_IMAGE:-monitorerp-kb-smoke-api:local}
+    build:
+      context: ./apps/api
+    environment:
+      # Full production env contract (apps/api/readme.md): every variable the
+      # API requires at boot, under the deployment shape — Postgres on
+      # host.docker.internal (the dev-compose server here on :5433, the
+      # server's own on :5432), RagFlow on host.docker.internal (the in-repo
+      # stub here, the server's RagFlow on :8080), placeholder credentials.
+      DATABASE_URL: postgres://monitorerp:monitorerp@host.docker.internal:5433/monitorerp_kb_smoke
+      JWT_SECRET: smoke-only-secret
+      ADMIN_EMAIL: smoke@monitorerp.local
+      ADMIN_PASSWORD: smoke-admin-password
+      ADMIN_NAME: Smoke Admin
+      RAGFLOW_URL: http://host.docker.internal:9399
+      RAGFLOW_API_KEY: stub-key
+      RAGFLOW_DATASET_ID: smoke-dataset
+      RAGFLOW_AGENT_ID: smoke-agent
+      POLL_INTERVAL_MS: "5000"
+      PORT: "4801"
+    ports:
+      - "127.0.0.1:4801:4801"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Deployment healthcheck contract: /health on :4801.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4801/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  web:
+    image: ${SMOKE_WEB_IMAGE:-monitorerp-kb-smoke-web:local}
+    build:
+      context: ./apps/web
+    environment:
+      # Deployment contract: the API origin is the internal service name. The
+      # image bakes the same value (standalone serializes the rewrite at build
+      # time), so this line is the deploy compose's runtime line repeated for
+      # parity — both consumers must never disagree.
+      API_ORIGIN: http://api:4801
+      PORT: "4800"
+    ports:
+      - "127.0.0.1:4800:4800"
+    healthcheck:
+      # Deployment healthcheck contract: the sign-in page.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4800/auth/sign-in >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
