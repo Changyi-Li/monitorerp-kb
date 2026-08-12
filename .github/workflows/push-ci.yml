@@ -1,7 +1,8 @@
 # Push CI: the daily suites, on every push to main.
 #
-# Runs the pre-existing suites exactly as written locally — no test code is
-# changed by this workflow:
+# Runs the pre-existing suites via their existing npm scripts — the one
+# exception is a pre-existing strict-mode red in the retry journey that this
+# workflow surfaced (fixed by an exact-match assertion, commit e9ef985):
 #
 #   1. API: typecheck + daily vitest suite (needs Postgres)
 #   2. Web: lint + production build (hermetic — no services)
