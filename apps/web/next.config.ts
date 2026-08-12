@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${API_ORIGIN}/:path*` }];
   },
+  // Production container image: the Dockerfile ships the traced standalone
+  // runtime (server.js) instead of a full node_modules tree. Dev and the e2e
+  // harness are unaffected — they run `next dev`, which ignores this output.
+  output: "standalone",
 };
 
 export default nextConfig;
