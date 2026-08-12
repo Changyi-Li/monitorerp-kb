@@ -157,9 +157,10 @@ test.describe('document journeys', () => {
     expect(detail.document.status).toBe('failed')
     expect(detail.document.retries_left).toBe(0)
 
-    // Withdraw → re-publish completes.
+    // Withdraw → re-publish completes. Exact match: the history list also
+    // contains "moved … → draft" spans, which substring matching would hit.
     await panel.getByRole('button', { name: 'Withdraw' }).click()
-    await expect(panel.getByText('Draft')).toBeVisible()
+    await expect(panel.getByText('Draft', { exact: true })).toBeVisible()
     await panel.getByRole('button', { name: 'Close details' }).click()
     await rowAction(page, row, 'Publish')
     // Same sync as the first publish: DONE must not land before triggerParse's
