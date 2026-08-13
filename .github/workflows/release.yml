@@ -1,0 +1,68 @@
+# Release workflow (issue #46): tag → build → smoke → publish to GHCR.
+#
+# Pushing a v* tag triggers this workflow. It builds both production images,
+# runs the smoke harness against them (smoke/smoke.sh — the ticket-45 seam:
+# containerized boot under the production env shape, asserting the health
+# chain in order), and only on success publishes the images to GHCR under
+# ghcr.io/changyi-li/ tagged with exactly the git tag — the deploy stack's
+# KB_TAG resolves to them. Runs no test suites of its own: the tagged commit
+# was already vetted by push-CI (the daily suites on main) and by the
+# maintainer's local gate-then-tag flow.
+#
+# A failed smoke aborts the job before anything is published. The harness
+# itself builds the images from source (compose.smoke.yml), so a broken
+# Dockerfile reds here too — the images it smoke-tests are the exact images
+# pushed (the publish step only renames them to the GHCR contract names).
+#
+# Publishing uses the workflow's automatic token with package-write
+# permission — no stored secrets anywhere. One-time manual post-condition
+# (issue #46): after the first successful run, flip both GHCR packages to
+# public visibility in the package settings UI so the deploy repo's relay
+# script can pull them with zero authentication.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # The smoke harness runs the in-repo RagFlow stub through tsx on
+          # the host; Node 22 matches push-CI.
+          node-version: 22
+
+      - name: Install API dependencies (smoke harness stub)
+        working-directory: apps/api
+        run: npm ci
+
+      - name: Build both images and smoke-test them
+        run: bash smoke/smoke.sh
+
+      - name: Log in to GHCR (automatic token)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish both images tagged with the git tag
+        env:
+          # The image contract (deploy repo's KB_TAG): the registry is the
+          # maintainer account's GHCR namespace, the tag is exactly the git tag.
+          REGISTRY: ghcr.io/changyi-li
+        run: |
+          # The :local names are compose.smoke.yml's image defaults — the
+          # smoke harness builds them; renaming one there means this step
+          # reds at docker tag (before anything is pushed).
+          docker tag monitorerp-kb-smoke-api:local "$REGISTRY/kb-api:${{ github.ref_name }}"
+          docker tag monitorerp-kb-smoke-web:local "$REGISTRY/kb-web:${{ github.ref_name }}"
+          docker push "$REGISTRY/kb-api:${{ github.ref_name }}"
+          docker push "$REGISTRY/kb-web:${{ github.ref_name }}"
