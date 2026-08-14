@@ -5,6 +5,7 @@ import { createAgentClient } from './ragflow/agent.js'
 import { createRagflowClient } from './ragflow/client.js'
 import { authRoutes } from './routes/auth.js'
 import { chatRoutes } from './routes/chat.js'
+import { datasetRoutes } from './routes/dataset.js'
 import { documentsRoutes } from './routes/documents.js'
 import { usersRoutes } from './routes/users.js'
 
@@ -13,6 +14,7 @@ export function createApp(deps: Deps): Hono {
   app.get('/health', (c) => c.json({ ok: true }))
   app.route('/auth', authRoutes(deps))
   app.route('/chat', chatRoutes(deps))
+  app.route('/dataset', datasetRoutes(deps))
   app.route('/documents', documentsRoutes(deps))
   app.route('/users', usersRoutes(deps))
   app.notFound((c) => sendError(c, 404, 'not_found', 'Not found'))

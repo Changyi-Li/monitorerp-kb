@@ -5,10 +5,6 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 
-// Display name of the configured RagFlow dataset (config-driven per #6;
-// deployments override NEXT_PUBLIC_DATASET_NAME).
-const DATASET_NAME = process.env.NEXT_PUBLIC_DATASET_NAME ?? "monitorerp-china-internal"
-
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,7 +22,7 @@ const NAV_ITEMS = [
 const visibleNavItems = (role: User["role"] | undefined): Array<(typeof NAV_ITEMS)[number]> =>
   NAV_ITEMS.filter((item) => !("adminOnly" in item) || item.adminOnly !== true || role === "super_admin")
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, datasetName }: { children: React.ReactNode; datasetName?: string }) {
   const router = useRouter()
   const pathname = usePathname()
   const [user, setUser] = useState<User | null>(null)
@@ -68,9 +64,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <BookOpen className="size-5 text-primary" aria-hidden />
           <span className="text-sm font-semibold">MonitorERP KB</span>
         </div>
-        <p className="truncate px-4 pb-3 text-xs text-muted-foreground" title="Dataset">
-          {DATASET_NAME}
-        </p>
+        {datasetName !== undefined && (
+          <p className="truncate px-4 pb-3 text-xs text-muted-foreground" title="Dataset">
+            {datasetName}
+          </p>
+        )}
         <nav className="flex flex-col gap-1 px-2" aria-label="Main">
           {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href)

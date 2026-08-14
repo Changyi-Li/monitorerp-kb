@@ -74,6 +74,7 @@ export interface RagflowClient {
   setChunkMethod(documentId: string, chunkMethod: string): Promise<void>
   triggerParse(documentId: string): Promise<void>
   deleteDocument(documentId: string): Promise<void>
+  getDataset(): Promise<{ name: string }>
 }
 
 interface RagflowDocumentPayload {
@@ -81,6 +82,11 @@ interface RagflowDocumentPayload {
   // Real RagFlow v0.26.4 returns `data` as an array of documents, even for a
   // single-file upload (issue #13).
   data?: Array<{ id?: string; name?: string; size?: number; chunk_count?: number; run?: string }>
+}
+
+interface RagflowDatasetPayload {
+  code?: number
+  data?: { name?: string }
 }
 
 interface RagflowListItemPayload {
@@ -232,6 +238,25 @@ export function createRagflowClient(config: Config): RagflowClient {
         throw new RagflowError(`RagFlow delete failed with status ${upstream.status}`, upstream.status)
       }
       await expectCodeZero(upstream, 'RagFlow delete was rejected')
+    },
+
+    async getDataset() {
+      // The display name the web shell shows (issue #40): read from RagFlow
+      // at runtime, never baked into a client bundle. Real RagFlow v0.26.4
+      // returns `data` as the dataset object with `name`.
+      const upstream = await guardedFetch(
+        new URL(`/api/v1/datasets/${config.ragflowDatasetId}`, base),
+        { method: 'GET' },
+        authHeader,
+      )
+      if (!upstream.ok) {
+        throw new RagflowError(`RagFlow dataset fetch failed with status ${upstream.status}`, upstream.status)
+      }
+      const payload = (await parseUpstreamJson(upstream)) as RagflowDatasetPayload
+      if (payload.code !== 0 || typeof payload.data?.name !== 'string') {
+        throw new RagflowError('RagFlow returned an error payload')
+      }
+      return { name: payload.data.name }
     },
   }
 }

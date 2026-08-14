@@ -2,6 +2,18 @@ import { expect, test } from '@playwright/test'
 import { ADMIN, signIn, uploadFile } from './helpers'
 
 test.describe('shell polish', () => {
+  test('the sidebar shows the dataset name from the API, never a baked-in codename', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+
+    // Issue #40: the dataset display name is derived at runtime (the API
+    // reads it from the RagFlow stub here), not baked into the client bundle
+    // at build time. The stub's dataset name must appear, and the old
+    // hardcoded internal codename must not.
+    const sidebar = page.locator('aside').first()
+    await expect(sidebar.getByText('Stub Knowledge Dataset')).toBeVisible()
+    await expect(sidebar).not.toContainText('monitorerp-china-internal')
+  })
+
   test('the theme toggle persists across reloads and dark mode uses the locked primary', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
 

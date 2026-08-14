@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { RagflowError, createRagflowClient } from '../src/ragflow/client.js'
 import { TEST_CONFIG } from './helpers.js'
+import { rejectionPayload } from './ragflow-wire.js'
 
 interface RecordedRequest {
   method: string
@@ -134,6 +135,48 @@ describe('RagFlow client — listDocuments wire shape', () => {
     server.payload.current = '<html>proxy error</html>'
     const client = createRagflowClient({ ...TEST_CONFIG, ragflowUrl: url })
     await expect(client.listDocuments()).rejects.toBeInstanceOf(RagflowError)
+  })
+})
+
+// Pins the client's dataset read to the real RagFlow wire shape: GET
+// /api/v1/datasets/{id} returns `data` as the dataset object with `name`.
+// The web shell will show this name in the sidebar (issue #40) — a regression
+// to a bare-name or renamed field would silently break that display.
+describe('RagFlow client — getDataset wire shape', () => {
+  let server: PayloadServer
+  let url: string
+
+  beforeAll(async () => {
+    server = await startPayloadServer()
+    url = server.url
+  })
+
+  afterAll(async () => {
+    await server.close()
+  })
+
+  it('requests GET /api/v1/datasets/{id} and parses the dataset name', async () => {
+    server.payload.current = {
+      code: 0,
+      data: { id: 'dev-dataset', name: 'MonitorERP China — Internal', description: 'The kb dataset' },
+    }
+    const client = createRagflowClient({ ...TEST_CONFIG, ragflowUrl: url })
+    expect(await client.getDataset()).toEqual({ name: 'MonitorERP China — Internal' })
+    const request = server.requests.at(-1)
+    expect(request?.method).toBe('GET')
+    expect(request?.url).toBe(`/api/v1/datasets/${TEST_CONFIG.ragflowDatasetId}`)
+  })
+
+  it('throws RagflowError when the dataset object lacks a name', async () => {
+    server.payload.current = { code: 0, data: { id: 'dev-dataset' } }
+    const client = createRagflowClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await expect(client.getDataset()).rejects.toBeInstanceOf(RagflowError)
+  })
+
+  it('throws RagflowError on a non-zero code (rejection envelope)', async () => {
+    server.payload.current = rejectionPayload(102, 'dataset not found')
+    const client = createRagflowClient({ ...TEST_CONFIG, ragflowUrl: url })
+    await expect(client.getDataset()).rejects.toBeInstanceOf(RagflowError)
   })
 })
 

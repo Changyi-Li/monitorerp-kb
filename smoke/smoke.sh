@@ -2,9 +2,10 @@
 # Smoke harness (issue #45): boot the locally built production images under
 # the deployment env shape and assert the health chain, in order:
 #
-#   1. API health endpoint   — http://127.0.0.1:4801/health
-#   2. Web sign-in page      — http://127.0.0.1:4800/auth/sign-in
-#   3. Web→API rewrite       — POST /api/auth/sign-in through the web origin
+#   1. Web bundle carries no baked-in dataset codename (issue #40)
+#   2. API health endpoint   — http://127.0.0.1:4801/health
+#   3. Web sign-in page      — http://127.0.0.1:4800/auth/sign-in
+#   4. Web→API rewrite       — POST /api/auth/sign-in through the web origin
 #
 # Nothing is published or pulled: compose.smoke.yml builds both images from
 # source (local builds only), and the release workflow runs this script
@@ -95,18 +96,30 @@ if [ -z "${SMOKE_API_IMAGE:-}" ]; then "${COMPOSE_SMOKE[@]}" build api; fi
 if [ -z "${SMOKE_WEB_IMAGE:-}" ]; then "${COMPOSE_SMOKE[@]}" build web; fi
 "${COMPOSE_SMOKE[@]}" up -d --wait
 
-# 5. The three assertions, in order.
-echo -n "[1/3] API health endpoint ... "
+# 5. The four assertions, in order.
+echo -n "[1/4] Web bundle carries no baked-in dataset codename ... "
+# Issue #40 regression guard: the dataset display name must come from the API
+# at runtime, never from a NEXT_PUBLIC_* variable `next build` inlined into
+# the client bundle (a dev-server e2e cannot see that). The runtime image
+# ships .next/static, so grep the built bundle for the old default — if it
+# ever returns, the release reds here instead of shipping the codename.
+if docker compose -f compose.smoke.yml run --rm --no-deps web \
+  sh -c 'grep -rq "monitorerp-china-internal" .next/static'; then
+  fail "the web client bundle still bakes the internal dataset codename (issue #40)"
+fi
+echo "ok"
+
+echo -n "[2/4] API health endpoint ... "
 curl -fsS http://127.0.0.1:4801/health | grep -q '"ok":true' \
   || fail "API /health did not answer 200"
 echo "ok"
 
-echo -n "[2/3] Web sign-in page ... "
+echo -n "[3/4] Web sign-in page ... "
 curl -fsS -o /dev/null http://127.0.0.1:4800/auth/sign-in \
   || fail "web sign-in page did not answer 200"
 echo "ok"
 
-echo -n "[3/3] Web→API rewrite (POST /api/auth/sign-in through the web) ... "
+echo -n "[4/4] Web→API rewrite (POST /api/auth/sign-in through the web) ... "
 # The browser's own path: the sign-in form posts to /api/auth/sign-in, which
 # the web rewrites to http://api:4801/auth/sign-in — proving the rewrite, the
 # API auth, and the seeded super admin together.

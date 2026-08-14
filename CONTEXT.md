@@ -29,7 +29,7 @@ A managed file together with its metadata and history, owned by the user who upl
 _Avoid_: doc, file
 
 **Dataset**:
-The RagFlow collection a document is published to. A single dataset is configured server-side (currently `monitorerp-china-internal`); the app never manages datasets.
+The RagFlow collection a document is published to. A single dataset is configured server-side (via `RAGFLOW_DATASET_ID`); the app never manages datasets. The dataset's display name is read from RagFlow at runtime (issue #40), never baked into a client bundle.
 _Avoid_: knowledge base, collection
 
 **Document status**:

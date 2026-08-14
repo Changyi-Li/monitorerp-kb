@@ -261,3 +261,28 @@ describe('RagFlow stub — delete wire contract', () => {
     expect(res.status).toBe(405)
   })
 })
+
+// Pins the stub's dataset GET to the wire shape of real RagFlow v0.26.4:
+// `data` is the dataset OBJECT with `name` — the display name the web shell
+// shows in its sidebar (issue #40). A regression to a bare string or to the
+// documents-array shape would mask a client bug at that seam.
+describe('RagFlow stub — dataset GET wire shape', () => {
+  let stub: RagflowStub
+
+  beforeAll(async () => {
+    stub = await startRagflowStub()
+  })
+
+  afterAll(async () => {
+    await stub.close()
+  })
+
+  it('returns the dataset object with the configured name', async () => {
+    stub.datasetName = 'Stub Knowledge Dataset'
+    const res = await fetch(`${stub.url}/api/v1/datasets/dev-dataset`)
+    expect(res.status).toBe(200)
+    const payload = (await res.json()) as { code: number; data?: unknown }
+    expect(payload.code).toBe(0)
+    expect(payload.data).toMatchObject({ id: 'dev-dataset', name: 'Stub Knowledge Dataset' })
+  })
+})

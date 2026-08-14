@@ -4,6 +4,7 @@ import {
   completionStream,
   deleteDocuments,
   deleteSession,
+  fetchDataset,
   fetchSession,
   listDocsOf,
   listDocuments,
@@ -85,6 +86,16 @@ describe('stage (c): stub revalidation against the real RagFlow instance', () =>
     // #14), never a bare array.
     expect(payload).toMatchObject(listPayload(expect.any(Array) as unknown[], expect.any(Number)))
     expect(listDocsOf(payload).map((doc) => doc.id)).toContain(uploadedDocumentId)
+  })
+
+  it('dataset: data is the dataset OBJECT with a string name (the shell display name, issue #40)', async () => {
+    const { status, payload } = await fetchDataset()
+    expect(status).toBe(200)
+    // The stub's dataset row: `data` is an OBJECT with `name` — never a bare
+    // string or a documents array.
+    expect(payload).toMatchObject(okPayload({ id: expect.any(String), name: expect.any(String) }))
+    const data = payload['data'] as { name?: unknown }
+    expect((data.name as string).trim().length).toBeGreaterThan(0)
   })
 
   it('parse trigger: document_ids in the JSON body, run leaves UNSTART — never waited out', async () => {

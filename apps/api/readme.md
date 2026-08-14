@@ -56,12 +56,14 @@ so a wire-level problem is diagnosed before the slower stages run:
 - **Stage (c) — stub revalidation** (`npm run gate:revalidation`): audits the
   RagFlow **stub's** scripted wire expectations against the real wire —
   direct HTTP probes for upload, list, parse trigger (stopped at `RUNNING`,
-  never waited out), delete, session get/delete, and one completion stream.
+  never waited out), delete, dataset GET (the shell's display name, #40),
+  session get/delete, and one completion stream.
 - **Stage (a+) — contract tests** (`npm run gate:contract`): drives the app's
   real RagFlow client and agent client against the live instance — upload,
-  list, download (byte-for-byte), chunk-method flip, parse trigger, delete,
-  session fetch/delete, and the error surfaces (`code != 0` rejections map to
-  `RagflowError`). A real parse runs to `DONE` with `chunk_count > 0` (short
+  list, download (byte-for-byte), chunk-method flip, parse trigger, dataset
+  fetch, delete, session fetch/delete, and the error surfaces (`code != 0`
+  rejections map to `RagflowError`). A real parse runs to `DONE` with
+  `chunk_count > 0` (short
   poll, multi-minute timeout), and a real completion stream is piped through
   the app's chat transform (think-tag stripping, event normalization,
   citation→Document mapping against the live reference shape).

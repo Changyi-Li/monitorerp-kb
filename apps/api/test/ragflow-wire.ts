@@ -44,6 +44,11 @@ export const datasetDocumentsUrl = (base: string, datasetId: string): string =>
 export const datasetChunksUrl = (base: string, datasetId: string): string =>
   `${stripTrailingSlash(base)}/api/v1/datasets/${datasetId}/chunks`
 
+/** The dataset object endpoint — GET returns `data` as the dataset with
+ * `name` (the web shell's display name, issue #40). */
+export const datasetUrl = (base: string, datasetId: string): string =>
+  `${stripTrailingSlash(base)}/api/v1/datasets/${datasetId}`
+
 /** Parse trigger body: `document_ids` (plural, array) in the JSON body, NOT
  * a `document_id` query param (issue #14). */
 export const parseTriggerBody = (documentIds: string[]): { document_ids: string[] } => ({ document_ids: documentIds })

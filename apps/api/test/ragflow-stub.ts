@@ -67,6 +67,9 @@ export interface RagflowStub {
   failList: boolean
   failCompletions: boolean
   failSessionDeletes: boolean
+  failDatasets: boolean
+  /** The display name the dataset GET returns (issue #40). */
+  datasetName: string
   setRun: (id: string, run: string) => void
   setProgress: (id: string, progress: number) => void
   setProgressMsg: (id: string, message: string) => void
@@ -78,9 +81,9 @@ export interface RagflowStub {
  * In-process stand-in for the RagFlow HTTP API (per the testing decision:
  * "RagFlow is faked at the HTTP client boundary"). Implements upload (creates
  * an unparsed document), list (with run/progress state), download, the
- * chunk_method PUT (parser flip), the parse trigger, and delete. Tests drive
- * sweeper transitions by mutating the stub's run state, then assert through
- * the API.
+ * chunk_method PUT (parser flip), the parse trigger, delete, and the dataset
+ * GET (the display name, issue #40). Tests drive sweeper transitions by
+ * mutating the stub's run state, then assert through the API.
  */
 // The scripted agent completion stream mirrors the REAL wire (issue #32):
 // reasoning is gated by `start_to_think`/`end_to_think` flags on `message`
@@ -218,6 +221,8 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     failList: false,
     failCompletions: false,
     failSessionDeletes: false,
+    failDatasets: false,
+    datasetName: 'Stub Knowledge Dataset',
     setRun: (id, run) => {
       const upload = uploads.find((u) => u.id === id)
       if (upload !== undefined) upload.run = run
@@ -247,6 +252,7 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const chunksMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/chunks$/)
     const docMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)\/documents(?:\/([^/]+))?$/)
+    const datasetMatch = url.pathname.match(/^\/api\/v1\/datasets\/([^/]+)$/)
     const fail = (code: number, message: string): void => {
       res.writeHead(code, { 'content-type': 'application/json' })
       res.end(JSON.stringify(rejectionPayload(code, message)))
@@ -407,6 +413,16 @@ export async function startRagflowStub(port = 0): Promise<RagflowStub> {
       }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(okPayload({ chunk_count: 0 })))
+      return
+    }
+
+    if (datasetMatch !== null && req.method === 'GET') {
+      if (stub.failDatasets) return fail(500, 'simulated dataset fetch failure')
+      res.writeHead(200, { 'content-type': 'application/json' })
+      // Real RagFlow v0.26.4 returns `data` as the dataset OBJECT with `name`
+      // — the display name the web shell shows (issue #40) — not a bare
+      // string or a documents array.
+      res.end(JSON.stringify(okPayload({ id: datasetMatch[1], name: stub.datasetName })))
       return
     }
 

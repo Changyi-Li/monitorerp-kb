@@ -4,6 +4,7 @@ import {
   completionRequestBody,
   datasetChunksUrl,
   datasetDocumentsUrl,
+  datasetUrl,
   deleteDocumentsBody,
   parseTriggerBody,
   sessionDeleteBody,
@@ -110,6 +111,10 @@ export const uploadDocument = (name: string, content: string): Promise<ProbeResu
 
 export const listDocuments = (): Promise<ProbeResult> =>
   request('list documents', datasetDocumentsUrl(liveEnv.ragflowUrl, liveEnv.ragflowDatasetId), { method: 'GET' })
+
+/** The dataset object — GET returns `data` with `name` (issue #40). */
+export const fetchDataset = (): Promise<ProbeResult> =>
+  request('fetch dataset', datasetUrl(liveEnv.ragflowUrl, liveEnv.ragflowDatasetId), { method: 'GET' })
 
 export const triggerParse = (documentIds: string[]): Promise<ProbeResult> =>
   request('parse trigger', datasetChunksUrl(liveEnv.ragflowUrl, liveEnv.ragflowDatasetId), {

@@ -111,6 +111,12 @@ describe('stage (a+): contract tests against the real RagFlow instance', () => {
     }
   })
 
+  it('getDataset returns the live dataset display name (the web shell sidebar line, issue #40)', async () => {
+    const { name } = await withInfraRetry('dataset fetch', () => client.getDataset())
+    expect(name).toBeTypeOf('string')
+    expect(name.trim().length).toBeGreaterThan(0)
+  })
+
   it('upload maps the live response to {documentId, chunkCount}', async () => {
     const result = await withInfraRetry('upload', () =>
       client.uploadDocument({ stream: Readable.from([PROBE_CONTENT]), filename: PROBE_NAME, mimeType: 'text/markdown' }),

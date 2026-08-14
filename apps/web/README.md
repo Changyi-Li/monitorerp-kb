@@ -16,8 +16,10 @@ npm install
 npm run dev                                # web on :4800
 ```
 
-The dataset display name is config-driven via `NEXT_PUBLIC_DATASET_NAME`
-(default `monitorerp-china-internal`).
+The dataset display name in the sidebar is derived at runtime: the shell
+layout (server-side) fetches `/dataset` from the API, which reads the name
+from the configured RagFlow dataset (issue #40). Nothing is baked into the
+client bundle at build time.
 
 ## End-to-end tests (Playwright)
 
