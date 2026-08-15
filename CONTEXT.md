@@ -5,7 +5,7 @@ An app that manages RAG documents for a self-hosted RagFlow instance: users uplo
 ## Language
 
 **User**:
-A person with an account in the system.
+A person with an account in the system, who signs in either with a password or via OIDC.
 _Avoid_: account, person
 
 **Member**:
@@ -17,8 +17,16 @@ A user with the elevated role — manages users (activation, role changes, deact
 _Avoid_: admin
 
 **Activation**:
-The act of a super admin enabling a registered but inactive account. Newly signed-up users are inactive until activated; the first account is seeded as an activated super admin.
+The act of a super admin enabling a registered but inactive account. Newly signed-up (password) users are inactive until activated; users who sign in via OIDC are active immediately — the identity provider vouches for them; the first account is seeded as an activated super admin.
 _Avoid_: approval, verification
+
+**OIDC sign-in**:
+Signing in through an external identity provider (Keycloak) instead of a password: the provider vouches for who the user is, and the app creates or links the User's account from the provider's identity. OIDC users start as Members, active immediately; roles are still app-managed.
+_Avoid_: SSO, social login, federated login
+
+**Identity link**:
+The association between a User's app account and their external identity-provider identity (keyed by the provider's stable subject identifier). Once linked, both doors — password and OIDC — lead to the same account; linking an OIDC identity to an existing password account with the same email is automatic.
+_Avoid_: merge, bind, mapping
 
 **Account status**:
 Whether a User can sign in: `active`, `pending` (signed up, awaiting activation), or `deactivated` (cannot sign in; reactivation restores access). There is no account deletion in v1 — deactivation is the removal mechanism.
