@@ -1,21 +1,23 @@
 "use client";
 
-// THROWAWAY PROTOTYPE — citation-expansion UX comparison (grilled 2026-08-14).
-// "Four variants of the chat citation expansion, switchable via ?variant=, on
-// the existing /chat route." Four structurally different ways to show a cited
-// source when a [n] chip is clicked in a long answer:
-//   A — inline accordion (card opens at the citation's position in the text)
-//   B — docked sources drawer (fixed right panel, answer never moves)
-//   C — anchored popover (card opens near the clicked number)
-//   D — auto-scroll baseline (today's bottom card, scrolled into view)
-// NOT production code: static mock data, no tests, no persistence. When a
-// winner is chosen, fold it into chat-page.tsx properly and delete this file.
+// THROWAWAY PROTOTYPE — citation-expansion UX (grilled 2026-08-14, verdict
+// 2026-08-15: A and B win, C and D dropped).
+// "Combined A+B on the existing /chat route: inline accordion by default,
+// docked sources drawer as the user's alternative, switchable via a toggle
+// in the header, persisted locally." Verdict and the full A–D variant set
+// (primary source) live on branch prototype/citation-expansion-variants.
+// NOT production code: static mock data, no tests, no persistence beyond
+// the localStorage mode choice. When the design is settled, fold it into
+// chat-page.tsx properly and delete this file.
 
 import { Plus, Send, Sparkles, X } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+type CitationMode = "inline" | "drawer";
+const MODE_KEY = "citation-mode"; // prototype-scoped localStorage key
 
 // --- Mock data (realistic sample content, per the KB domain) ---------------
 
@@ -109,20 +111,12 @@ const tokensOf = (text: string): Token[] =>
 
 // --- Shared pieces (same visual language as the real chat) -----------------
 
-function Chip({
-  n,
-  active,
-  onCite,
-}: {
-  n: number;
-  active?: boolean;
-  onCite: (n: number, anchor: HTMLElement) => void;
-}) {
+function Chip({ n, active, onCite }: { n: number; active?: boolean; onCite: (n: number) => void }) {
   const cite = CITATIONS.find((c) => c.n === n);
   return (
     <button
       type="button"
-      onClick={(e) => onCite(n, e.currentTarget)}
+      onClick={() => onCite(n)}
       disabled={cite === undefined}
       aria-expanded={active}
       aria-label={cite !== undefined ? `Source ${n}: ${cite.document_name}` : `Source ${n}`}
@@ -262,104 +256,20 @@ function VariantB() {
   );
 }
 
-// --- Variant C: anchored popover — card opens at the clicked number ----------
-
-const POPOVER_WIDTH = 384;
-const POPOVER_MAX_HEIGHT = 320;
-
-function VariantC() {
-  // Fixed-position anchor computed from the clicked chip's rect: chips sit at
-  // line ends, so a naive "below the chip" popover would run off the right
-  // edge of the viewport; clamping keeps it visible on any chip.
-  const [pos, setPos] = useState<{ n: number; x: number; y: number } | null>(null);
-
-  const openAt = (n: number, anchor: HTMLElement): void => {
-    const rect = anchor.getBoundingClientRect();
-    let x = rect.left;
-    if (x + POPOVER_WIDTH > window.innerWidth - 16) x = Math.max(16, window.innerWidth - POPOVER_WIDTH - 16);
-    let y = rect.bottom + 8;
-    if (y + POPOVER_MAX_HEIGHT > window.innerHeight - 16) y = Math.max(16, rect.top - POPOVER_MAX_HEIGHT - 8);
-    setPos((cur) => (cur?.n === n && cur.x === x && cur.y === y ? null : { n, x, y }));
-  };
-
-  // Close on click-outside or Escape while the popover is open.
-  useEffect(() => {
-    if (pos === null) return;
-    const onPointerDown = (e: PointerEvent): void => {
-      const target = e.target as Node | null;
-      if (target === null || !document.querySelector(`[data-citation-popover]`)?.contains(target)) {
-        setPos(null);
-      }
-    };
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") setPos(null);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [pos]);
-
-  const citation = pos !== null ? byN(pos.n) : null;
-  return (
-    <div>
-      {ANSWER_PARAGRAPHS.map((paragraph, i) => (
-        <p key={i} className="my-2 text-sm leading-relaxed first:mt-0">
-          {tokensOf(paragraph).map((token, j) =>
-            token.cite === undefined ? (
-              <span key={j}>{token.text}</span>
-            ) : (
-              <span key={j} className="inline">
-                <Chip n={token.cite} active={pos?.n === token.cite} onCite={openAt} />
-              </span>
-            ),
-          )}
-        </p>
-      ))}
-      {citation !== null && pos !== null && (
-        <div
-          data-citation-popover
-          style={{ left: pos.x, top: pos.y, width: POPOVER_WIDTH }}
-          className="fixed z-30 max-h-80 overflow-y-auto rounded-lg shadow-xl"
-        >
-          <ProtoCitationCard citation={citation} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// --- Variant D: auto-scroll baseline — today's bottom card, scrolled into view
-
-function VariantD() {
-  const [active, setActive] = useState<number | null>(null);
-  const cardRef = useRef<HTMLDivElement>(null);
-
-  // The card mounts below the answer; bring it into view without moving the
-  // user's place any more than necessary (this is the whole variant).
-  useEffect(() => {
-    if (active === null) return;
-    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [active]);
-
-  const citation = active !== null ? byN(active) : null;
-  return (
-    <>
-      {paragraphsWithChips((n) => setActive((cur) => (cur === n ? null : n)), (n) => n === active)}
-      {citation !== null && (
-        <div ref={cardRef} className="mt-3">
-          <ProtoCitationCard citation={citation} />
-        </div>
-      )}
-    </>
-  );
-}
-
 // --- The prototype surface: mock thread inside the real chat frame -----------
 
-export function CitationExpansionPrototype({ variant }: { variant: string }) {
+export function CitationExpansionPrototype() {
+  // The user's mode choice: inline accordion (default) or docked drawer,
+  // remembered across reloads (prototype-scoped key).
+  const [mode, setMode] = useState<CitationMode>(() => {
+    if (typeof window === "undefined") return "inline";
+    const stored = window.localStorage.getItem(MODE_KEY);
+    return stored === "drawer" ? "drawer" : "inline";
+  });
+  useEffect(() => {
+    window.localStorage.setItem(MODE_KEY, mode);
+  }, [mode]);
+
   return (
     <div className="flex h-full min-h-0">
       {/* Static session sidebar — mock, mirrors the real chat page. */}
@@ -388,9 +298,43 @@ export function CitationExpansionPrototype({ variant }: { variant: string }) {
         </div>
       </aside>
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b px-6 py-3">
-          <h1 className="truncate text-sm font-semibold">Mock session — citation prototype</h1>
-          <p className="text-xs text-muted-foreground">Static mock · flip variants with the bar below (or ← / →)</p>
+        <header className="flex items-center gap-4 border-b px-6 py-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold">Mock session — citation prototype</h1>
+            <p className="text-xs text-muted-foreground">
+              Static mock · {mode === "inline" ? "citations open in the answer" : "citations open in a side panel"}
+            </p>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="How cited sources open"
+            className="flex shrink-0 items-center gap-0.5 rounded-lg border bg-muted p-0.5"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "inline"}
+              onClick={() => setMode("inline")}
+              className={cn(
+                "cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                mode === "inline" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Inline
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "drawer"}
+              onClick={() => setMode("drawer")}
+              className={cn(
+                "cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                mode === "drawer" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Side panel
+            </button>
+          </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
@@ -404,12 +348,7 @@ export function CitationExpansionPrototype({ variant }: { variant: string }) {
                 <Sparkles className="size-4" aria-hidden />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm leading-relaxed">
-                  {variant === "A" && <VariantA />}
-                  {variant === "B" && <VariantB />}
-                  {variant === "C" && <VariantC />}
-                  {variant === "D" && <VariantD />}
-                </div>
+                <div className="text-sm leading-relaxed">{mode === "inline" ? <VariantA /> : <VariantB />}</div>
               </div>
             </div>
             <p className="text-center text-xs text-muted-foreground">
