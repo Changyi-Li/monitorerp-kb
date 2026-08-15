@@ -22,6 +22,7 @@ export const TEST_CONFIG: Config = {
   ragflowAgentId: 'dev-agent',
   pollIntervalMs: 0, // tests drive the sweeper explicitly
   port: 0,
+  oidc: null, // OIDC disabled by default — the daily suites run unconfigured
 }
 
 export interface TestDatabase {

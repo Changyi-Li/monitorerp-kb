@@ -65,6 +65,7 @@ const config: Config = {
   ragflowAgentId: liveEnv.ragflowAgentId,
   pollIntervalMs: 0,
   port: 0,
+  oidc: null,
 }
 const client: RagflowClient = createRagflowClient(config)
 const agent: AgentClient = createAgentClient(config)
