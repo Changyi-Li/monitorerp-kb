@@ -1,9 +1,9 @@
 "use client";
 
-import { ChevronDown, ExternalLink, Plus, Send, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, ExternalLink, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -30,14 +30,61 @@ interface ChatMessage {
 }
 
 /**
- * The one open citation per message, identified by ordinal AND occurrence:
- * an answer can cite the same source more than once (issue #48), so the open
- * card is anchored to the exact marker that was clicked.
+ * The one open citation across the whole thread, identified by message AND
+ * ordinal AND occurrence: an answer can cite the same source more than once
+ * (issue #48), and two messages can cite the same source, so the open card is
+ * anchored to the exact marker that was clicked. One card at a time — in
+ * inline mode it renders at the marker (issue #48); in side panel mode the
+ * same focus drives the docked panel (issue #49).
  */
 interface CitationFocus {
+  /** The message whose marker is open. */
+  messageId: string;
   n: number;
   /** The marker's position among same-ordinal markers, in document order (1-based). */
   occ: number;
+}
+
+/** How citation chips open: inline at the marker (default) or in a docked side panel. */
+type CitationMode = "inline" | "side";
+
+/** The id of the citation card for a marker — the marker's aria-controls, in
+ *  both inline and side panel mode, so it must come from one place. */
+const citationCardId = (messageId: string, n: number, occ: number): string => `citation-card-${messageId}-${n}-${occ}`;
+
+/** Whether two focus descriptors name the same marker (issue #49: the open
+ *  card is anchored to the exact message + ordinal + occurrence). */
+const sameFocus = (a: CitationFocus, b: CitationFocus): boolean =>
+  a.messageId === b.messageId && a.n === b.n && a.occ === b.occ;
+
+// App-scoped. Only the value "side" opts into the panel; anything else —
+// missing, or "drawer" from the old prototype — means inline.
+const CITATION_MODE_STORAGE_KEY = "citation-mode";
+
+// The citation mode is an external store (localStorage, spec #47: device-local)
+// read through useSyncExternalStore. A useState lazy initializer would
+// re-read storage during hydration and render attributes the server HTML
+// doesn't have — React 19 does NOT patch attribute mismatches, so the
+// hydrated DOM would keep the server's stale values. The store instead
+// renders the server snapshot ("inline") during hydration, then React
+// re-renders once the client snapshot differs.
+const citationModeListeners = new Set<() => void>();
+
+function getStoredCitationMode(): CitationMode {
+  if (typeof window === "undefined") return "inline";
+  return window.localStorage.getItem(CITATION_MODE_STORAGE_KEY) === "side" ? "side" : "inline";
+}
+
+function subscribeCitationMode(listener: () => void): () => void {
+  citationModeListeners.add(listener);
+  return () => {
+    citationModeListeners.delete(listener);
+  };
+}
+
+function setStoredCitationMode(mode: CitationMode): void {
+  window.localStorage.setItem(CITATION_MODE_STORAGE_KEY, mode);
+  citationModeListeners.forEach((listener) => listener());
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -62,6 +109,13 @@ export function ChatPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // How citations open (spec #47): inline at the marker by default, or in a
+  // docked side panel; the choice is device-local (issue #49). The external
+  // store renders "inline" on the server and picks up the stored value after
+  // hydration (see the store above).
+  const citationMode = useSyncExternalStore<CitationMode>(subscribeCitationMode, getStoredCitationMode, () => "inline");
+  // The one open citation across the whole thread (see CitationFocus above).
+  const [citationFocus, setCitationFocus] = useState<CitationFocus | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   // The key of the thread the in-flight completion writes into ("new" until
   // the lazy session event re-homes it under the created session id).
@@ -147,15 +201,54 @@ export function ChatPage() {
     };
   }, [router, searchParams, loadHistory]);
 
+  // Escape closes the side panel (issue #49); inline mode has no Escape
+  // interaction.
+  useEffect(() => {
+    if (citationMode !== "side" || citationFocus === null) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setCitationFocus(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [citationMode, citationFocus]);
+
   const activeThread = useMemo(
     () => (activeId === null ? threads.get("new") ?? EMPTY_MESSAGES : threads.get(activeId) ?? EMPTY_MESSAGES),
     [threads, activeId],
   );
 
+  // The side panel shows the focused marker's citation, resolved from the
+  // active thread — a stale focus from a switched-away session resolves to
+  // null, so the panel never lingers on content that is no longer on screen.
+  const panelCitation = useMemo(() => {
+    if (citationFocus === null) return null;
+    const message = activeThread.find((m) => m.id === citationFocus.messageId);
+    return message?.citations?.find((c) => c.n === citationFocus.n) ?? null;
+  }, [activeThread, citationFocus]);
+
   // The thread auto-scrolls to the latest content as the answer streams in.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [activeThread, streaming]);
+
+  // Clicking a chip toggles that marker's card: the same marker closes it,
+  // any other marker replaces it — one card at a time across the whole
+  // thread, rendered inline at the marker (issue #48) or in the side panel
+  // (issue #49) depending on the mode.
+  const handleCite = useCallback((focus: CitationFocus): void => {
+    setCitationFocus((cur) => (cur !== null && sameFocus(cur, focus) ? null : focus));
+  }, []);
+
+  // Switching modes closes any open card (spec #47). Re-selecting the active
+  // option is a no-op, per radiogroup semantics — it must not close the card.
+  const chooseCitationMode = useCallback(
+    (next: CitationMode): void => {
+      if (next === citationMode) return;
+      setStoredCitationMode(next);
+      setCitationFocus(null);
+    },
+    [citationMode],
+  );
 
   const refreshSessions = useCallback((): void => {
     listChatSessions()
@@ -293,8 +386,9 @@ export function ChatPage() {
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-72 shrink-0 flex-col border-r bg-sidebar/40">
+    <>
+      <div className="flex h-full min-h-0">
+        <aside className="flex w-72 shrink-0 flex-col border-r bg-sidebar/40">
         <div className="p-3">
           <Button className="w-full justify-start" onClick={startNew} disabled={streaming}>
             <Plus aria-hidden /> New chat
@@ -364,11 +458,14 @@ export function ChatPage() {
         </div>
       </aside>
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="border-b px-6 py-3">
-          <h1 className="truncate text-sm font-semibold">{activeSession?.title ?? "New chat"}</h1>
-          {activeSession !== null && (
-            <p className="text-xs text-muted-foreground">Updated {relativeTime(activeSession.updated_at)}</p>
-          )}
+        <header className="flex items-center gap-4 border-b px-6 py-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold">{activeSession?.title ?? "New chat"}</h1>
+            {activeSession !== null && (
+              <p className="text-xs text-muted-foreground">Updated {relativeTime(activeSession.updated_at)}</p>
+            )}
+          </div>
+          <CitationModeToggle mode={citationMode} onChange={chooseCitationMode} />
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-3xl flex-col gap-5 px-6 py-6">
@@ -377,7 +474,15 @@ export function ChatPage() {
             ) : activeThread.length === 0 ? (
               <EmptyState />
             ) : (
-              activeThread.map((m) => <MessageBubble key={m.id} message={m} />)
+              activeThread.map((m) => (
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  mode={citationMode}
+                  focused={citationFocus}
+                  onCite={handleCite}
+                />
+              ))
             )}
             <div ref={bottomRef} />
           </div>
@@ -395,7 +500,15 @@ export function ChatPage() {
           </div>
         </div>
       </section>
-    </div>
+      </div>
+      {citationMode === "side" && citationFocus !== null && panelCitation !== null && (
+        <CitationPanel
+          citation={panelCitation}
+          cardId={citationCardId(citationFocus.messageId, citationFocus.n, citationFocus.occ)}
+          onClose={() => setCitationFocus(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -413,8 +526,18 @@ function EmptyState() {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
-  const [focused, setFocused] = useState<CitationFocus | null>(null);
+function MessageBubble({
+  message,
+  mode,
+  focused,
+  onCite,
+}: {
+  message: ChatMessage;
+  mode: CitationMode;
+  /** The thread-wide open citation; only the marker it names is affected. */
+  focused: CitationFocus | null;
+  onCite: (focus: CitationFocus) => void;
+}) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -424,12 +547,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     );
   }
-  // Clicking an inline [n] chip toggles that marker's card in place; clicking
-  // the same marker collapses it, clicking any other marker replaces it
-  // (one card per message, issue #48). The card itself renders inside
-  // AnswerWithCitations, at the marker's position in the answer flow.
-  const handleCite = (n: number, occ: number): void =>
-    setFocused((cur) => (cur !== null && cur.n === n && cur.occ === occ ? null : { n, occ }));
+  // Clicking an [n] chip toggles that marker's card (the page owns the
+  // toggle); the card renders inside AnswerWithCitations at the marker's
+  // position in the answer flow in inline mode (issue #48), and in the
+  // docked side panel in side panel mode (issue #49).
+  const handleCite = (n: number, occ: number): void => onCite({ messageId: message.id, n, occ });
 
   return (
     <div className="flex gap-3">
@@ -443,6 +565,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             content={message.content}
             citations={message.citations}
             messageId={message.id}
+            mode={mode}
             focused={focused}
             onCite={handleCite}
           />
@@ -514,7 +637,9 @@ const stripNode = <P extends { node?: unknown }>(props: P): Omit<P, "node"> => {
  *
  * The open citation's card is rendered by the walker as the NEXT SIBLING of
  * its marker (issue #48) — the card interrupts the answer at the marker's
- * position instead of sitting below the whole answer. The card is a block
+ * position instead of sitting below the whole answer — but only in inline
+ * mode; in side panel mode (issue #49) the page renders the same card in the
+ * docked panel instead, so the answer flow never moves. The card is a block
  * element, so inside a phrase-only container like <p> the nesting is
  * technically invalid HTML; it is only ever created client-side after
  * hydration (the initial state is always collapsed), so there is no parser
@@ -525,12 +650,14 @@ function AnswerWithCitations({
   content,
   citations,
   messageId,
+  mode,
   focused,
   onCite,
 }: {
   content: string;
   citations?: ChatCitation[];
   messageId: string;
+  mode: CitationMode;
   focused: CitationFocus | null;
   onCite: (n: number, occ: number) => void;
 }) {
@@ -548,8 +675,8 @@ function AnswerWithCitations({
   const chip = (n: number, key: string | number) => {
     const cite = byOrdinal.get(n);
     const occ = nextOcc(n);
-    const open = cite !== undefined && focused !== null && focused.n === n && focused.occ === occ;
-    const cardId = `citation-card-${messageId}-${n}-${occ}`;
+    const open = cite !== undefined && focused !== null && sameFocus(focused, { messageId, n, occ });
+    const cardId = citationCardId(messageId, n, occ);
     return (
       <Fragment key={key}>
         <button
@@ -574,7 +701,7 @@ function AnswerWithCitations({
         >
           {n}
         </button>
-        {open && cite !== undefined && <CitationCard id={cardId} citation={cite} />}
+        {open && cite !== undefined && mode === "inline" && <CitationCard id={cardId} citation={cite} />}
       </Fragment>
     );
   };
@@ -696,6 +823,68 @@ function CitationCard({ id, citation }: { id: string; citation: ChatCitation }) 
         </Link>
       )}
     </div>
+  );
+}
+
+/**
+ * The two-option citation mode control in the chat header (spec #47): a
+ * segmented radiogroup — "Inline" (default) and "Side panel" — with the
+ * chosen mode marked aria-checked. The choice is device-local.
+ */
+function CitationModeToggle({ mode, onChange }: { mode: CitationMode; onChange: (mode: CitationMode) => void }) {
+  const radio = (value: CitationMode, label: string) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={mode === value}
+      onClick={() => onChange(value)}
+      className={cn(
+        "cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+        mode === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div
+      role="radiogroup"
+      aria-label="How cited sources open"
+      className="flex shrink-0 items-center gap-0.5 rounded-lg border bg-muted p-0.5"
+    >
+      {radio("inline", "Inline")}
+      {radio("side", "Side panel")}
+    </div>
+  );
+}
+
+/**
+ * The docked side panel (issue #49): a fixed right dock hosting the focused
+ * marker's citation card — the answer text never moves. The X button and
+ * Escape close it; `cardId` is the focused marker's card id, so the marker's
+ * aria-controls stays valid across both modes.
+ */
+function CitationPanel({ citation, cardId, onClose }: { citation: ChatCitation; cardId: string; onClose: () => void }) {
+  return (
+    <aside
+      aria-label={`Cited source ${citation.n}`}
+      className="fixed inset-y-0 right-0 z-40 flex w-96 flex-col border-l bg-background shadow-2xl"
+    >
+      <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
+        <p className="text-sm font-semibold">Cited source {citation.n}</p>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close source panel"
+          className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <CitationCard id={cardId} citation={citation} />
+      </div>
+    </aside>
   );
 }
 

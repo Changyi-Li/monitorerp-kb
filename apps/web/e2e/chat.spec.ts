@@ -190,6 +190,112 @@ test.describe('chat', () => {
     await expect(panel.getByRole('button', { name: 'Close details' })).toBeVisible()
   })
 
+  test('the citation mode toggle switches to the side panel; the answer never moves, and X or Escape closes the panel', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    // The managed Document: the stub assigns 'Leave Policy.md' the fixed id
+    // its scripted citation [ID:19] references, so this upload maps to the card.
+    await uploadFile(page, 'Leave Policy.md', '# Leave policy\n')
+
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    const composer = page.getByLabel('Message', { exact: true })
+    await composer.fill(`Cite ${RUN_TAG}`)
+    await page.getByRole('button', { name: 'Send message' }).click()
+    await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
+
+    // The header toggle is a two-option radiogroup; inline is the default.
+    const radiogroup = page.getByRole('radiogroup', { name: 'How cited sources open' })
+    const inline = radiogroup.getByRole('radio', { name: 'Inline' })
+    const side = radiogroup.getByRole('radio', { name: 'Side panel' })
+    await expect(inline).toHaveAttribute('aria-checked', 'true')
+    await expect(side).toHaveAttribute('aria-checked', 'false')
+
+    const chip1 = page.getByRole('button', { name: 'Source 19: Leave Policy.md' })
+    const chip2 = page.getByRole('button', { name: 'Source 41: External Handbook.pdf' })
+    const bubble = page.locator('div.text-sm.leading-relaxed')
+    const passage = 'Leave is capped at 21 days per year.'
+
+    // Inline mode (the default): a click expands the card at the marker.
+    await chip1.click()
+    await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md, expanded' })).toBeVisible()
+    await expect(bubble).toContainText(passage)
+
+    // Switching to side panel mode closes the open card.
+    await side.click()
+    await expect(side).toHaveAttribute('aria-checked', 'true')
+    await expect(inline).toHaveAttribute('aria-checked', 'false')
+    await expect(bubble).not.toContainText(passage)
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
+
+    // In side panel mode a click docks the card on the right; the answer
+    // flow — pinned by the position of the marker AFTER the card's inline
+    // landing spot — does not move.
+    await chip1.scrollIntoViewIfNeeded()
+    const chip2Box = (await chip2.boundingBox()) as { y: number }
+    await chip1.click()
+    const panel = page.getByRole('complementary', { name: 'Cited source 19' })
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText(passage)
+    await expect(panel.getByText('Leave Policy.md')).toBeVisible()
+    await expect(panel.getByText('page 3')).toBeVisible()
+    await expect(panel.getByRole('link', { name: 'Open full document' })).toBeVisible()
+    // No inline card: the answer area holds only the answer's own text, and
+    // the open citation's marker is highlighted in the panel mode too.
+    await expect(bubble).not.toContainText(passage)
+    await expect(chip1).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip2).toHaveAttribute('aria-expanded', 'false')
+    expect((await chip2.boundingBox())?.y).toBeCloseTo(chip2Box.y, 1)
+
+    // The X button closes the panel.
+    await panel.getByRole('button', { name: 'Close source panel' }).click()
+    await expect(panel).not.toBeVisible()
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
+
+    // Clicking another marker opens ITS source; clicking a third swaps the
+    // panel's content without closing it.
+    await chip2.click()
+    const panel2 = page.getByRole('complementary', { name: 'Cited source 41' })
+    await expect(panel2).toBeVisible()
+    await expect(panel2.getByText('It resets every calendar year.', { exact: false })).toBeVisible()
+    await expect(panel2.getByText('External Handbook.pdf')).toBeVisible()
+    await expect(panel2.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
+    await expect(chip2).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
+
+    await chip1.click()
+    await expect(page.getByRole('complementary', { name: 'Cited source 19' })).toBeVisible()
+    await expect(chip1).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip2).toHaveAttribute('aria-expanded', 'false')
+
+    // Escape closes it too.
+    await page.keyboard.press('Escape')
+    await expect(panel).not.toBeVisible()
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('the citation mode choice persists across reloads (default: inline)', async ({ page }) => {
+    await signIn(page, ADMIN.email, ADMIN.password)
+    await page.getByRole('link', { name: 'Chat' }).click()
+    await page.waitForURL(/\/chat(\?.*)?$/)
+
+    // Fresh storage: inline is the default.
+    const inline = page.getByRole('radio', { name: 'Inline' })
+    const side = page.getByRole('radio', { name: 'Side panel' })
+    await expect(inline).toHaveAttribute('aria-checked', 'true')
+    await expect(side).toHaveAttribute('aria-checked', 'false')
+
+    // Switching persists the choice in localStorage (spec #47: device-local).
+    await side.click()
+    await expect(side).toHaveAttribute('aria-checked', 'true')
+    expect(await page.evaluate(() => localStorage.getItem('citation-mode'))).toBe('side')
+
+    // Reload: the choice survives.
+    await page.reload()
+    await expect(side).toHaveAttribute('aria-checked', 'true')
+    await expect(inline).toHaveAttribute('aria-checked', 'false')
+  })
+
   test('Show thinking toggles the collapsible reasoning pane', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     await page.getByRole('link', { name: 'Chat' }).click()
