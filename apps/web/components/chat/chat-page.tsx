@@ -3,7 +3,7 @@
 import { ChevronDown, ExternalLink, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -27,6 +27,17 @@ interface ChatMessage {
   streaming?: boolean;
   thinking?: string;
   citations?: ChatCitation[];
+}
+
+/**
+ * The one open citation per message, identified by ordinal AND occurrence:
+ * an answer can cite the same source more than once (issue #48), so the open
+ * card is anchored to the exact marker that was clicked.
+ */
+interface CitationFocus {
+  n: number;
+  /** The marker's position among same-ordinal markers, in document order (1-based). */
+  occ: number;
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -403,7 +414,7 @@ function EmptyState() {
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
-  const [focused, setFocused] = useState<number | null>(null);
+  const [focused, setFocused] = useState<CitationFocus | null>(null);
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -413,10 +424,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       </div>
     );
   }
-  // Clicking an inline [n] chip toggles that source's card directly under
-  // the answer; clicking another marker swaps the shown card.
-  const handleCite = (n: number): void => setFocused((cur) => (cur === n ? null : n));
-  const focusedCitation = message.citations?.find((c) => c.n === focused);
+  // Clicking an inline [n] chip toggles that marker's card in place; clicking
+  // the same marker collapses it, clicking any other marker replaces it
+  // (one card per message, issue #48). The card itself renders inside
+  // AnswerWithCitations, at the marker's position in the answer flow.
+  const handleCite = (n: number, occ: number): void =>
+    setFocused((cur) => (cur !== null && cur.n === n && cur.occ === occ ? null : { n, occ }));
 
   return (
     <div className="flex gap-3">
@@ -426,16 +439,17 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <div className="min-w-0 flex-1">
         <ThinkingPane thinking={message.thinking} streaming={message.streaming} />
         <div className="text-sm leading-relaxed">
-          <AnswerWithCitations content={message.content} citations={message.citations} onCite={handleCite} />
+          <AnswerWithCitations
+            content={message.content}
+            citations={message.citations}
+            messageId={message.id}
+            focused={focused}
+            onCite={handleCite}
+          />
           {message.streaming && message.content !== "" && (
             <span className="ml-0.5 inline-block h-3.5 w-0.5 translate-y-0.5 bg-foreground/70 motion-safe:animate-pulse" aria-hidden />
           )}
         </div>
-        {focusedCitation !== undefined && (
-          <div className="mt-3">
-            <CitationCard citation={focusedCitation} />
-          </div>
-        )}
       </div>
     </div>
   );
@@ -497,36 +511,71 @@ const stripNode = <P extends { node?: unknown }>(props: P): Omit<P, "node"> => {
  * has no link-reference definition, so CommonMark keeps it as literal text;
  * walkMarkers then turns those text nodes back into the clickable chips,
  * wherever they land (paragraph, list item, …). Unmatched markers are inert.
+ *
+ * The open citation's card is rendered by the walker as the NEXT SIBLING of
+ * its marker (issue #48) — the card interrupts the answer at the marker's
+ * position instead of sitting below the whole answer. The card is a block
+ * element, so inside a phrase-only container like <p> the nesting is
+ * technically invalid HTML; it is only ever created client-side after
+ * hydration (the initial state is always collapsed), so there is no parser
+ * correction or hydration mismatch, and React's dev-mode nesting warning is
+ * a console-only noise.
  */
 function AnswerWithCitations({
   content,
   citations,
+  messageId,
+  focused,
   onCite,
 }: {
   content: string;
   citations?: ChatCitation[];
-  onCite: (n: number) => void;
+  messageId: string;
+  focused: CitationFocus | null;
+  onCite: (n: number, occ: number) => void;
 }) {
   const byOrdinal = new Map((citations ?? []).map((c) => [c.n, c]));
+  // Each rendered marker gets its position among same-ordinal markers, in
+  // document order — the card is anchored to the exact clicked occurrence.
+  // The walk is deterministic per render, so occurrences are stable.
+  const occCounts = new Map<number, number>();
+  const nextOcc = (n: number): number => {
+    const next = (occCounts.get(n) ?? 0) + 1;
+    occCounts.set(n, next);
+    return next;
+  };
 
   const chip = (n: number, key: string | number) => {
     const cite = byOrdinal.get(n);
+    const occ = nextOcc(n);
+    const open = cite !== undefined && focused !== null && focused.n === n && focused.occ === occ;
+    const cardId = `citation-card-${messageId}-${n}-${occ}`;
     return (
-      <button
-        key={key}
-        type="button"
-        onClick={() => onCite(n)}
-        disabled={cite === undefined}
-        aria-label={cite !== undefined ? `Source ${n}: ${cite.document_name}` : `Source ${n}`}
-        className={cn(
-          "mx-0.5 inline-flex h-4 min-w-4 -translate-y-1.5 items-center justify-center rounded-full px-1 align-baseline text-[10px] font-semibold tabular-nums transition-colors",
-          cite !== undefined
-            ? "bg-primary/15 text-primary hover:bg-primary hover:text-primary-foreground"
-            : "bg-muted text-muted-foreground",
-        )}
-      >
-        {n}
-      </button>
+      <Fragment key={key}>
+        <button
+          type="button"
+          onClick={() => onCite(n, occ)}
+          disabled={cite === undefined}
+          aria-expanded={cite !== undefined ? open : undefined}
+          aria-controls={open ? cardId : undefined}
+          aria-label={
+            cite !== undefined
+              ? `Source ${n}: ${cite.document_name}${open ? ", expanded" : ", collapsed"}`
+              : `Source ${n}`
+          }
+          className={cn(
+            "mx-0.5 inline-flex h-4 min-w-4 -translate-y-1.5 items-center justify-center rounded-full px-1 align-baseline text-[10px] font-semibold tabular-nums transition-colors",
+            cite === undefined
+              ? "bg-muted text-muted-foreground"
+              : open
+                ? "bg-primary text-primary-foreground ring-2 ring-primary/25"
+                : "bg-primary/15 text-primary hover:bg-primary hover:text-primary-foreground",
+          )}
+        >
+          {n}
+        </button>
+        {open && cite !== undefined && <CitationCard id={cardId} citation={cite} />}
+      </Fragment>
     );
   };
 
@@ -612,10 +661,16 @@ function AnswerWithCitations({
 /**
  * One cited source — the card LEADS with the chunk passage and page, then
  * shows the document name; "Open full document" appears only for our docs.
+ * Rendered in the answer flow at its marker's position (issue #48); `id`
+ * wires the marker's aria-controls. `whitespace-normal` keeps the card
+ * readable when the marker happens to land in a <pre> (white-space inherits).
  */
-function CitationCard({ citation }: { citation: ChatCitation }) {
+function CitationCard({ id, citation }: { id: string; citation: ChatCitation }) {
   return (
-    <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-left">
+    <div
+      id={id}
+      className="my-2 whitespace-normal rounded-lg border border-primary/40 bg-primary/5 p-3 text-left"
+    >
       <div className="flex items-start gap-2">
         <span className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary tabular-nums">
           {citation.n}

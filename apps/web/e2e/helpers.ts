@@ -45,6 +45,19 @@ export async function rowAction(page: Page, row: Locator, label: string): Promis
   await page.getByRole('menuitem', { name: label }).click()
 }
 
+/**
+ * Asserts the inline-contract position of an open citation card (issue #48):
+ * the card interrupts the answer flow — below the `above` marker, above the
+ * `below` marker — instead of landing below the whole answer.
+ */
+export async function expectCardInlineBetween(card: Locator, above: Locator, below: Locator): Promise<void> {
+  const cardBox = (await card.boundingBox()) as { y: number; height: number }
+  const aboveBox = (await above.boundingBox()) as { y: number }
+  const belowBox = (await below.boundingBox()) as { y: number }
+  expect(cardBox.y).toBeGreaterThan(aboveBox.y) // directly under the clicked marker
+  expect(belowBox.y).toBeGreaterThan(cardBox.y + cardBox.height) // ...not below the whole answer
+}
+
 /** Drives the RagFlow stub's run state for a document by its file name. */
 export async function setStubRun(
   name: string,

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { activateUser, ADMIN, apiSignUp, signIn, uniqueEmail, uploadFile } from './helpers'
+import { activateUser, ADMIN, apiSignUp, expectCardInlineBetween, signIn, uniqueEmail, uploadFile } from './helpers'
 
 const STUB_URL = 'http://127.0.0.1:9399'
 
@@ -115,7 +115,7 @@ test.describe('chat', () => {
     expect(second?.sessionId).toBe(first?.streamedSessionId)
   })
 
-  test('citation chips reveal source cards; Open full document only for managed Documents', async ({ page }) => {
+  test('citation chips expand the source card inline at the marker; Open full document only for managed Documents', async ({ page }) => {
     await signIn(page, ADMIN.email, ADMIN.password)
     // The managed Document: the stub assigns 'Leave Policy.md' the fixed id
     // its scripted citation [ID:19] references, so this upload maps to the card.
@@ -127,17 +127,34 @@ test.describe('chat', () => {
     const composer = page.getByLabel('Message', { exact: true })
     await composer.fill(`Cite ${RUN_TAG}`)
     await page.getByRole('button', { name: 'Send message' }).click()
+
+    // Mid-stream: the [19] marker has rendered but its citation arrives only
+    // with the terminal reference — the chip stays inert and disabled, and
+    // its name is just the ordinal (issue #48).
+    await expect(page.getByText('Leave is capped', { exact: false })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 19', exact: true })).toBeDisabled()
     await expect(page.getByText(ANSWER, { exact: false })).toBeVisible()
 
     // Both [n] markers render as clickable chips (rewritten from [ID:n]).
+    // The name is a substring so it matches the chip in both its collapsed
+    // and expanded state.
     const chip1 = page.getByRole('button', { name: 'Source 19: Leave Policy.md' })
     const chip2 = page.getByRole('button', { name: 'Source 41: External Handbook.pdf' })
     await expect(chip1).toBeVisible()
     await expect(chip2).toBeVisible()
 
-    // Clicking [19] reveals the managed source's card: passage, page, name.
+    // Clicking [19] reveals the managed source's card AT the marker — the
+    // card interrupts the answer between the two markers (below [19], above
+    // [41]) instead of landing below the whole answer. The open citation's
+    // marker is highlighted and announces the expansion state.
     await chip1.click()
-    await expect(page.getByText('Leave is capped at 21 days per year.', { exact: false })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md, expanded' })).toBeVisible()
+    await expect(chip1).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip2).toHaveAttribute('aria-expanded', 'false')
+    const card = page.getByText('Leave is capped at 21 days per year.', { exact: false })
+    await expect(card).toBeVisible()
+    await expectCardInlineBetween(card, chip1, chip2)
+
     await expect(page.getByText('Leave Policy.md')).toBeVisible()
     await expect(page.getByText('page 3')).toBeVisible()
     const openLink = page.getByRole('link', { name: 'Open full document' })
@@ -145,12 +162,17 @@ test.describe('chat', () => {
 
     // Clicking the same chip again collapses the card.
     await chip1.click()
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
+    await expect(card).not.toBeVisible()
     await expect(page.getByText('Leave Policy.md')).not.toBeVisible()
     await expect(page.getByText('page 3')).not.toBeVisible()
     await expect(openLink).not.toBeVisible()
 
     // Clicking [41] swaps to the external source: no page, no link.
     await chip2.click()
+    await expect(page.getByRole('button', { name: 'Source 41: External Handbook.pdf, expanded' })).toBeVisible()
+    await expect(chip2).toHaveAttribute('aria-expanded', 'true')
+    await expect(chip1).toHaveAttribute('aria-expanded', 'false')
     await expect(page.getByText('It resets every calendar year.', { exact: false })).toBeVisible()
     await expect(page.getByText('External Handbook.pdf')).toBeVisible()
     await expect(page.getByText('page 3')).not.toBeVisible()
@@ -272,8 +294,18 @@ test.describe('chat', () => {
     await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Source 41: External Handbook.pdf' })).toBeVisible()
 
-    // History citations link to managed Documents exactly as live ones do.
+    // History citations behave identically to live ones (issue #48): the
+    // card opens inline at the clicked marker, between the two chips, and
+    // links to managed Documents exactly as live ones do.
     await page.getByRole('button', { name: 'Source 19: Leave Policy.md' }).click()
+    await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md, expanded' })).toBeVisible()
+    const card = page.getByText('Leave is capped at 21 days per year.', { exact: false })
+    await expect(card).toBeVisible()
+    await expectCardInlineBetween(
+      card,
+      page.getByRole('button', { name: 'Source 19: Leave Policy.md' }),
+      page.getByRole('button', { name: 'Source 41: External Handbook.pdf' }),
+    )
     await expect(page.getByRole('link', { name: 'Open full document' })).toBeVisible()
     await page.getByRole('button', { name: 'Source 41: External Handbook.pdf' }).click()
     await expect(page.getByRole('link', { name: 'Open full document' })).not.toBeVisible()
@@ -306,7 +338,22 @@ test.describe('chat', () => {
     const chip = page.getByRole('button', { name: 'Source 19: Leave Policy.md' }).first()
     await expect(chip).toBeVisible()
     await chip.click()
-    await expect(page.getByText('Leave is capped at 21 days per year.', { exact: false })).toBeVisible()
+    const card = page.getByText('Leave is capped at 21 days per year.', { exact: false })
+    await expect(card).toBeVisible()
+    // Inline contract (issue #48): the card opens at the marker in the first
+    // paragraph — ABOVE the heading — not below the whole answer.
+    const heading = bubble.getByRole('heading', { level: 3, name: 'Leave policy' })
+    await expectCardInlineBetween(card, chip, heading)
+
+    // The answer cites [19] twice: clicking the SECOND occurrence (in the
+    // list) replaces the open card at the exact clicked marker — the card
+    // moves to below the heading, inside the list item.
+    await page.getByRole('button', { name: 'Source 19: Leave Policy.md' }).nth(1).click()
+    await expect(page.getByRole('button', { name: 'Source 19: Leave Policy.md, expanded' })).toBeVisible()
+    await expect(card).toBeVisible()
+    const cardBox = (await card.boundingBox()) as { y: number }
+    const headingBox = (await heading.boundingBox()) as { y: number }
+    expect(cardBox.y).toBeGreaterThan(headingBox.y)
   })
 
   test('a resumed session renders its markdown answer as markdown (#39)', async ({ page }) => {
