@@ -10,7 +10,7 @@ const E2E_DATABASE_URL = 'postgres://monitorerp:monitorerp@localhost:5433/monito
 const oidcEnv = loadOidcLiveEnv()
 
 /**
- * The live OIDC e2e configuration (spec #57 / issue #62) — a separate
+ * The live OIDC e2e configuration (spec #57; issues #62, #63) — a separate
  * configuration mirroring the daily e2e harness: same web server pattern
  * (the RagFlow stub, the API against the e2e database, the web dev server,
  * the same-origin proxy), with the four OIDC variables set so the API's

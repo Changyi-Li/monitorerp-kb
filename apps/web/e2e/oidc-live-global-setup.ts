@@ -1,7 +1,7 @@
-import { loadOidcLiveEnv } from './oidc-live-env'
+import { E2E_USER_PROFILE, loadOidcLiveEnv } from './oidc-live-env'
 
 /**
- * The live OIDC gate's preflight (spec #57 / issue #62): fail loudly — never
+ * The live OIDC gate's preflight (spec #57; issues #62, #63): fail loudly — never
  * a silent skip — when the Keycloak instance is unreachable or the admin
  * credentials are wrong, then ensure the gate's e2e user exists in the
  * `monitorerp` realm with a known password. The committed realm artifact
@@ -56,14 +56,16 @@ export default async function globalSetup(): Promise<void> {
 
   // The full profile Keycloak's default realm profile requires on login
   // (first/last name are mandatory — a user without them is forced through
-  // the "Update Account Information" page, which would stall the gate).
+  // the "Update Account Information" page, which would stall the gate). The
+  // names come from the shared e2e-user profile (oidc-live-env.ts) — the
+  // gate's sign-in assertion reads the display name derived from them.
   const userRepresentation = {
     username: env.e2eUser,
     email: env.e2eUser,
     emailVerified: true,
     enabled: true,
-    firstName: 'OIDC',
-    lastName: 'E2E',
+    firstName: E2E_USER_PROFILE.firstName,
+    lastName: E2E_USER_PROFILE.lastName,
   }
 
   // Find the e2e user; create it when missing.

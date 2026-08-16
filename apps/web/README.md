@@ -68,13 +68,15 @@ RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... 
 
 ## Release gate: OIDC sign-in round trip against the development Keycloak
 
-`npm run gate:oidc` (spec #57 / issue #62; own Playwright config
+`npm run gate:oidc` (spec #57; issues #62, #63; own Playwright config
 `playwright.oidc.config.ts` — the daily configuration is untouched) drives the
 real OIDC round trip against the development Keycloak: the sign-in page
 renders the "Sign in with Keycloak" button (the API's capability endpoint
 reports enabled), clicking it lands on the Keycloak login page (the realm is
-in the URL), signing in lands on the app signed in (the API provisions the
-User as an active Member), and signing out then clicking again re-enters
+in the URL), signing in lands on the app signed in as the e2e user (the API
+provisions the User as an active Member; the gate asserts the session's
+identity — the shell's profile name and role badge, and `/auth/me`), and
+signing out then clicking again re-enters
 without a password (the Keycloak session outlives the local app session).
 
 Prerequisites: the dev Keycloak running with the `monitorerp` realm imported

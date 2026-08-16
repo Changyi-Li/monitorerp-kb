@@ -68,8 +68,8 @@ docker run -d --name keycloak -p 8081:8080 \
 
 ### Live gate
 
-The web's live OIDC gate (`npm run gate:oidc` from `apps/web`, issue #62)
-drives the real round trip against this same development instance — the
+The web's live OIDC gate (`npm run gate:oidc` from `apps/web`, issues #62,
+#63) drives the real round trip against this same development instance — the
 button, the Keycloak login page, the signed-in landing, and passwordless
 re-entry. It needs the four `OIDC_*` variables set (as above); its preflight
 creates an e2e user in the realm via the Keycloak admin API (defaults:
