@@ -66,6 +66,16 @@ docker run -d --name keycloak -p 8081:8080 \
    `/auth/oidc/callback`) is a loud boot-time error, never a silent
    half-enabled state.
 
+### Live gate
+
+The web's live OIDC gate (`npm run gate:oidc` from `apps/web`, issue #62)
+drives the real round trip against this same development instance — the
+button, the Keycloak login page, the signed-in landing, and passwordless
+re-entry. It needs the four `OIDC_*` variables set (as above); its preflight
+creates an e2e user in the realm via the Keycloak admin API (defaults:
+`admin`/`admin` on the issuer's origin — override with
+`KEYCLOAK_ADMIN_USER`/`KEYCLOAK_ADMIN_PASSWORD`/`OIDC_E2E_USER`/`OIDC_E2E_PASSWORD`).
+
 ## Production import (headless)
 
 ### Prerequisites — all three

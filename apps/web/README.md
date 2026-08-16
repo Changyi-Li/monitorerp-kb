@@ -66,6 +66,28 @@ daily e2e stack first — both configurations own ports 4800/4801.
 RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... npm run gate:e2e
 ```
 
+## Release gate: OIDC sign-in round trip against the development Keycloak
+
+`npm run gate:oidc` (spec #57 / issue #62; own Playwright config
+`playwright.oidc.config.ts` — the daily configuration is untouched) drives the
+real OIDC round trip against the development Keycloak: the sign-in page
+renders the "Sign in with Keycloak" button (the API's capability endpoint
+reports enabled), clicking it lands on the Keycloak login page (the realm is
+in the URL), signing in lands on the app signed in (the API provisions the
+account), and signing out then clicking again re-enters without a password
+(the Keycloak session outlives the local app session).
+
+Prerequisites: the dev Keycloak running with the `monitorerp` realm imported
+(see `../docs/keycloak-provisioning.md`), and the four `OIDC_*` variables set.
+The gate's preflight creates its own e2e user in the realm via the Keycloak
+admin API (defaults: admin/admin on the issuer's origin — override with
+`KEYCLOAK_ADMIN_USER`/`KEYCLOAK_ADMIN_PASSWORD`/`OIDC_E2E_USER`/`OIDC_E2E_PASSWORD`).
+Stop the daily e2e stack first — both configurations own ports 4800/4801.
+
+```bash
+OIDC_ISSUER_URL=... OIDC_CLIENT_ID=... OIDC_CLIENT_SECRET=... OIDC_REDIRECT_URI=... npm run gate:oidc
+```
+
 ## Scripts
 
 | Script | What it does |
@@ -75,3 +97,4 @@ RAGFLOW_URL=... RAGFLOW_API_KEY=... RAGFLOW_DATASET_ID=... RAGFLOW_AGENT_ID=... 
 | `npm run lint` | ESLint |
 | `npm run test:e2e` | Playwright end-to-end suite (against the RagFlow stub) |
 | `npm run gate:e2e` | Stage (b) of the release gate — full-stack e2e against the real RagFlow instance (see above) |
+| `npm run gate:oidc` | Live OIDC gate — the real round trip against the development Keycloak (see above) |

@@ -2,9 +2,9 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -17,13 +17,49 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { apiJson, type ApiErrorBody, type User } from "@/lib/api"
 import { invalidateCurrentUserCache } from "@/lib/use-current-user"
+import { cn } from "@/lib/utils"
 
-export function SignInForm() {
+/** The capability endpoint's enabled shape (issue #58): disabled otherwise. */
+interface OidcConfig {
+  enabled: boolean
+  loginUrl?: string
+}
+
+export function SignInForm({ initialError = null }: { initialError?: string | null }) {
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(initialError)
   const [submitting, setSubmitting] = useState(false)
+  // The second door (issue #62): the login URL, present only when the API's
+  // capability endpoint reports OIDC enabled. Until the fetch settles (or
+  // when the API is unreachable) the button is absent — an unconfigured
+  // deployment never renders it.
+  const [oidcLoginUrl, setOidcLoginUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void apiJson<OidcConfig>("/api/auth/oidc/config")
+      .then(({ body }) => {
+        if (!cancelled && body.enabled === true && typeof body.loginUrl === "string" && body.loginUrl !== "") {
+          setOidcLoginUrl(body.loginUrl)
+        }
+      })
+      .catch(() => {
+        // API unreachable — treat as disabled: no Keycloak button.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (initialError === null) return
+    // The OIDC failure is a one-shot: drop the URL parameter so a refresh
+    // does not re-show a stale failure (a password error already clears on
+    // refresh — the message lives in component state only).
+    window.history.replaceState(null, "", window.location.pathname)
+  }, [initialError])
 
   const submit = async (): Promise<void> => {
     setSubmitting(true)
@@ -92,6 +128,23 @@ export function SignInForm() {
           <Button type="submit" className="w-full" disabled={submitting}>
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
+          {oidcLoginUrl !== null && (
+            <>
+              <div aria-hidden className="flex w-full items-center gap-2 text-xs text-muted-foreground">
+                <div className="h-px flex-1 bg-border" />
+                or
+                <div className="h-px flex-1 bg-border" />
+              </div>
+              {/* The API owns the flow: this same-origin link issues the flow
+                  cookie and 302s to the issuer (issues #58, #61, #62). */}
+              <a
+                href={oidcLoginUrl}
+                className={cn(buttonVariants({ variant: "outline" }), "w-full")}
+              >
+                Sign in with Keycloak
+              </a>
+            </>
+          )}
           <p className="text-sm text-muted-foreground">
             No account?{" "}
             <Link href="/auth/sign-up" className="text-primary underline-offset-4 hover:underline">

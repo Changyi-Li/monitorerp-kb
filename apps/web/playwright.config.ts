@@ -47,6 +47,16 @@ export default defineConfig({
         RAGFLOW_AGENT_ID: 'e2e-agent',
         POLL_INTERVAL_MS: '1000',
         PORT: '4801',
+        // OIDC must be OFF here (issue #62, acceptance 1 — the disabled state
+        // is covered by this daily suite): the API loads apps/api/.env at
+        // boot (process.loadEnvFile), so a developer's OIDC_* variables
+        // would otherwise enable the feature mid-suite. Empty values are
+        // "unset" for the all-or-nothing loader, and .env never overrides
+        // an already-present variable.
+        OIDC_ISSUER_URL: '',
+        OIDC_CLIENT_ID: '',
+        OIDC_CLIENT_SECRET: '',
+        OIDC_REDIRECT_URI: '',
       },
     },
     {

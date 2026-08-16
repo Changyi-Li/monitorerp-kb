@@ -90,6 +90,41 @@ test.describe('account journeys', () => {
     await page.getByRole('button', { name: 'Create account' }).click()
     await expect(page.locator('form').getByRole('alert')).toContainText('already exists')
   })
+
+  // issue #62, acceptance 1: the daily harness boots the API without the
+  // OIDC_* variables, so the capability endpoint reports disabled and the
+  // second door must not render — the page is exactly as before OIDC.
+  test('no Keycloak button appears when OIDC is unconfigured', async ({ page }) => {
+    // Wait for the capability fetch to settle before asserting absence, or
+    // the count-0 check could pass vacuously before the response arrives.
+    const configResponse = page.waitForResponse((r) => r.url().includes('/api/auth/oidc/config'))
+    await page.goto('/auth/sign-in')
+    await configResponse
+    await expect(page.getByRole('link', { name: 'Sign in with Keycloak', exact: true })).toHaveCount(0)
+  })
+
+  // issue #62, acceptance 3: the failure parameter renders the message in the
+  // existing error slot.
+  test('the OIDC failure parameter renders the failure message in the error slot', async ({ page }) => {
+    await page.goto('/auth/sign-in?error=oidc_failed')
+    await expect(page.locator('form').getByRole('alert')).toContainText('Sign in with Keycloak failed')
+    // The parameter is one-shot: after the message renders it is dropped from
+    // the URL, so a refresh does not re-show a stale failure.
+    await expect(page).toHaveURL(/\/auth\/sign-in$/)
+  })
+
+  // issue #62: the API's callback redirects a failed sign-in to the web
+  // origin root with ?error=oidc_failed; the proxy carries it to the sign-in
+  // page (the shell layout's guard would otherwise drop it). The message
+  // rendering proves the parameter reached the page — it is only served from
+  // the searchParams the proxy forwards.
+  test('a failed OIDC sign-in landing on the origin root bounces to the sign-in page with the message', async ({
+    page,
+  }) => {
+    await page.goto('/?error=oidc_failed')
+    await expect(page).toHaveURL(/\/auth\/sign-in/)
+    await expect(page.locator('form').getByRole('alert')).toContainText('Sign in with Keycloak failed')
+  })
 })
 
 test.describe('document journeys', () => {

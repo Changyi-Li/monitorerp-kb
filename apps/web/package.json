@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:e2e": "playwright test",
-    "gate:e2e": "playwright test --config playwright.live.config.ts"
+    "gate:e2e": "playwright test --config playwright.live.config.ts",
+    "gate:oidc": "playwright test --config playwright.oidc.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
