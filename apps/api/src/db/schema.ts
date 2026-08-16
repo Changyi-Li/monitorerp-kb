@@ -8,6 +8,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 
@@ -28,16 +29,28 @@ export const documentStatusEnum = pgEnum('document_status', [
   'failed',
 ])
 
-export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),
-  email: citext('email').notNull().unique(),
-  passwordHash: text('password_hash').notNull(),
-  role: roleEnum('role').notNull().default('member'),
-  status: accountStatusEnum('status').notNull().default('pending'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-})
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    email: citext('email').notNull().unique(),
+    // Nullable: OIDC-provisioned accounts (issue #59) have no password —
+    // the identity provider vouches for them. Password sign-in against
+    // such an account fails with the standard invalid-credentials response.
+    passwordHash: text('password_hash'),
+    role: roleEnum('role').notNull().default('member'),
+    status: accountStatusEnum('status').notNull().default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    // OIDC identity link — keyed by the provider's stable subject, never by
+    // email, so an email change in the identity provider cannot break the
+    // link. Null for password-only accounts; unique per provider.
+    issuer: text('issuer'),
+    subject: text('subject'),
+  },
+  (t) => [uniqueIndex('users_issuer_subject_unique').on(t.issuer, t.subject)],
+)
 
 // Size is stored as bigint (mode number) so multi-hundred-MB uploads are
 // exact; a 1 GiB cap is the app's own limit.

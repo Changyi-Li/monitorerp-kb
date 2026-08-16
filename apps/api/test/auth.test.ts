@@ -77,6 +77,17 @@ async function createActiveUser(): Promise<{ email: string; password: string }> 
   return { email: 'member@example.com', password: VALID_SIGNUP.password }
 }
 
+/** Creates an active, passwordless (OIDC-provisioned) user directly in the DB. */
+async function createPasswordlessUser(): Promise<void> {
+  await db.insert(users).values({
+    name: 'OIDC User',
+    email: 'oidc@example.com',
+    passwordHash: null,
+    role: 'member',
+    status: 'active',
+  })
+}
+
 describe('POST /auth/sign-up', () => {
   it('creates a pending member account (201) with a hashed password', async () => {
     const res = await signUp()
@@ -96,6 +107,7 @@ describe('POST /auth/sign-up', () => {
     expect(stored?.role).toBe('member')
     expect(stored?.passwordHash).not.toBe(VALID_SIGNUP.password)
     if (stored === undefined) throw new Error('user row missing')
+    if (stored.passwordHash === null) throw new Error('user row missing password hash')
     await expect(verifyPassword(VALID_SIGNUP.password, stored.passwordHash)).resolves.toBe(true)
   })
 
@@ -133,6 +145,22 @@ describe('POST /auth/sign-in', () => {
     expect((await jsonOf<ErrorResponse>(unknown)).error.code).toBe('unauthorized')
     const wrong = await postJson('/auth/sign-in', { email: 'ada@example.com', password: 'wrong-password' })
     expect(wrong.status).toBe(401)
+  })
+
+  it('returns 401 invalid-credentials (never a server error) for an account without a password', async () => {
+    // An OIDC-provisioned account (issue #59): no password hash, active.
+    await createPasswordlessUser()
+    const res = await postJson('/auth/sign-in', { email: 'oidc@example.com', password: 'any-password' })
+    expect(res.status).toBe(401)
+    expect((await jsonOf<ErrorResponse>(res)).error.code).toBe('unauthorized')
+  })
+
+  it('returns 401 for a passwordless account regardless of the password supplied', async () => {
+    await createPasswordlessUser()
+    for (const password of ['wrong-password', 'correct-horse', VALID_SIGNUP.password]) {
+      const res = await postJson('/auth/sign-in', { email: 'oidc@example.com', password })
+      expect(res.status).toBe(401)
+    }
   })
 
   it('returns 403 for a pending account', async () => {

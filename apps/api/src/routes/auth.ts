@@ -51,7 +51,10 @@ export function authRoutes(deps: Deps): Hono {
   app.post('/sign-in', jsonValidator(signInSchema), async (c) => {
     const { email, password } = c.req.valid('json')
     const [user] = await deps.db.select().from(users).where(eq(users.email, email)).limit(1)
-    if (user === undefined || !(await verifyPassword(password, user.passwordHash))) {
+    // A passwordless account (OIDC-provisioned, issue #59) has no hash to
+    // verify — it fails exactly like a wrong password: the standard
+    // invalid-credentials response, never a server error.
+    if (user === undefined || user.passwordHash === null || !(await verifyPassword(password, user.passwordHash))) {
       return sendError(c, 401, 'unauthorized', 'Invalid email or password')
     }
     if (user.status !== 'active') {
