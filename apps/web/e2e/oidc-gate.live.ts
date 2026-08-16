@@ -34,7 +34,7 @@ test.describe('stage: OIDC sign-in round trip against the development Keycloak',
     await page.getByLabel('Password', { exact: true }).fill(env.e2ePassword)
     await page.getByRole('button', { name: /sign in/i }).click()
 
-    // Signed in: the app shell renders (the API provisioned the account,
+    // Signed in: the app shell renders (the API provisioned the User —
     // active Member, no activation step).
     await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()

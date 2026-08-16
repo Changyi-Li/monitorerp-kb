@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { OIDC_ERROR_PARAM } from "@/lib/oidc";
+
 /**
  * Issue #62: the API-owned OIDC callback (issue #61) redirects a failed
  * sign-in to the web origin root with `?error=oidc_failed`. From there the
@@ -13,10 +15,10 @@ import type { NextRequest } from "next/server";
  */
 export function proxy(request: NextRequest) {
   const url = request.nextUrl;
-  if (url.pathname === "/" && url.searchParams.get("error") === "oidc_failed") {
+  if (url.pathname === "/" && url.searchParams.get("error") === OIDC_ERROR_PARAM) {
     if (!request.cookies.has("kb_session")) {
       const target = new URL("/auth/sign-in", request.url);
-      target.searchParams.set("error", "oidc_failed");
+      target.searchParams.set("error", OIDC_ERROR_PARAM);
       return NextResponse.redirect(target);
     }
   }

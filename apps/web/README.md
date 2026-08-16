@@ -74,8 +74,8 @@ real OIDC round trip against the development Keycloak: the sign-in page
 renders the "Sign in with Keycloak" button (the API's capability endpoint
 reports enabled), clicking it lands on the Keycloak login page (the realm is
 in the URL), signing in lands on the app signed in (the API provisions the
-account), and signing out then clicking again re-enters without a password
-(the Keycloak session outlives the local app session).
+User as an active Member), and signing out then clicking again re-enters
+without a password (the Keycloak session outlives the local app session).
 
 Prerequisites: the dev Keycloak running with the `monitorerp` realm imported
 (see `../docs/keycloak-provisioning.md`), and the four `OIDC_*` variables set.

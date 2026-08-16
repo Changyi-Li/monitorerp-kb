@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { OIDC_ERROR_PARAM } from '../lib/oidc'
 import {
   activateUser,
   ADMIN,
@@ -106,7 +107,7 @@ test.describe('account journeys', () => {
   // issue #62, acceptance 3: the failure parameter renders the message in the
   // existing error slot.
   test('the OIDC failure parameter renders the failure message in the error slot', async ({ page }) => {
-    await page.goto('/auth/sign-in?error=oidc_failed')
+    await page.goto(`/auth/sign-in?error=${OIDC_ERROR_PARAM}`)
     await expect(page.locator('form').getByRole('alert')).toContainText('Sign in with Keycloak failed')
     // The parameter is one-shot: after the message renders it is dropped from
     // the URL, so a refresh does not re-show a stale failure.
@@ -121,7 +122,7 @@ test.describe('account journeys', () => {
   test('a failed OIDC sign-in landing on the origin root bounces to the sign-in page with the message', async ({
     page,
   }) => {
-    await page.goto('/?error=oidc_failed')
+    await page.goto(`/?error=${OIDC_ERROR_PARAM}`)
     await expect(page).toHaveURL(/\/auth\/sign-in/)
     await expect(page.locator('form').getByRole('alert')).toContainText('Sign in with Keycloak failed')
   })

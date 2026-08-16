@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { BookOpen } from "lucide-react";
 
 import { SignInForm } from "@/components/auth/sign-in-form";
+import { OIDC_ERROR_PARAM } from "@/lib/oidc";
 
 export const metadata: Metadata = { title: "Sign in — MonitorERP KB" };
 
@@ -18,7 +19,7 @@ export default async function SignInPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const params = await searchParams;
-  const oidcFailed = params.error === "oidc_failed";
+  const oidcFailed = params.error === OIDC_ERROR_PARAM;
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-muted/40 p-6">
       <div className="flex items-center gap-2">
