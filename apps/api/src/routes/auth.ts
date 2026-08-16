@@ -5,8 +5,9 @@ import { authMiddleware } from '../auth/middleware.js'
 import { hashPassword, verifyPassword } from '../auth/passwords.js'
 import { toPublicUser } from '../auth/user.js'
 import { SESSION_MAX_AGE_SECONDS, sessionCookieHeader, signSessionToken } from '../auth/jwt.js'
-import type { Deps } from '../deps.js'
+import { isUniqueViolation } from '../db/errors.js'
 import { users } from '../db/schema.js'
+import type { Deps } from '../deps.js'
 import { sendError } from '../errors.js'
 import { jsonValidator } from '../validation.js'
 
@@ -20,13 +21,6 @@ const signInSchema = z.object({
   email: z.email().trim().toLowerCase(),
   password: z.string().min(1, 'Password is required'),
 })
-
-// Drizzle wraps driver errors as { query, params, cause }; the Postgres
-// SQLSTATE lives on the cause.
-function isUniqueViolation(err: unknown): boolean {
-  const cause = (err as { cause?: { code?: string } }).cause
-  return cause?.code === '23505'
-}
 
 export function authRoutes(deps: Deps): Hono {
   const app = new Hono()
